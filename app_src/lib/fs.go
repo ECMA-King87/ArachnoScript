@@ -205,3 +205,7 @@ func OpenFileInDir(dir, name string) File {
 func OpenRoot(name string) *os.Root {
 	return catch(os.OpenRoot(name))
 }
+
+func MkdirAll(path string, perm FileMode) error {
+	return os.MkdirAll(path, perm)
+}

@@ -4,24 +4,11 @@ import (
 	"bufio"
 	"os"
 	"strings"
-
-	"golang.org/x/sys/windows/registry"
 )
 
 func ReadRegistryValue(keyPath string, valueName string) (string, error) {
 	if Platform == "windows" {
-		key, err := registry.OpenKey(registry.CURRENT_USER, keyPath, registry.QUERY_VALUE)
-		if err != nil {
-			return "", err
-		}
-		defer key.Close()
-
-		value, _, err := key.GetStringValue(valueName)
-		if err != nil {
-			return "", err
-		}
-
-		return value, nil
+		return readWindowsRegistryValue(keyPath, valueName)
 	}
 	home, err := UserHomeDir()
 	if err != nil {
@@ -52,13 +39,7 @@ func ReadRegistryValue(keyPath string, valueName string) (string, error) {
 
 func WriteRegistryValue(keyPath string, valueName string, value string) error {
 	if Platform == "windows" {
-		key, err := registry.OpenKey(registry.CURRENT_USER, keyPath, registry.SET_VALUE)
-		if err != nil {
-			return err
-		}
-		defer key.Close()
-
-		return key.SetStringValue(valueName, value)
+		return writeWindowsRegistryValue(keyPath, valueName, value)
 	}
 
 	home, err := UserHomeDir()

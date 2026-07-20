@@ -1,6 +1,12 @@
 package runtime
 
-import "aspire/are/main/lib"
+import (
+	"aspire/are/main/lib"
+)
+
+func sessionFilePath(home string, timestamp int64) string {
+	return lib.JoinPaths(home, "Documents", "are-session-"+lib.Sprint(timestamp)+".txt")
+}
 
 // The REPL is inefficient and young.
 func REPL() {
@@ -22,9 +28,18 @@ func REPL() {
 		} else if input[0] == 0 || input == ".exit" {
 			break
 		} else if input == ".save" {
-			p, _ := lib.UserHomeDir()
-			path := p + "\\Documents\\are-session-" + lib.Sprint(lib.TimeNow().UnixMilli()) + ".txt"
-			err := lib.WriteTextFile(path, session.String())
+			p, err := lib.UserHomeDir()
+			if err != nil {
+				lib.Println(err)
+				continue
+			}
+			path := sessionFilePath(p, lib.TimeNow().UnixMilli())
+			err = lib.MkdirAll(lib.DirOf(path), 0o755)
+			if err != nil {
+				lib.Println(err)
+				continue
+			}
+			err = lib.WriteTextFile(path, session.String())
 			if err != nil {
 				lib.Println(err)
 			} else {
