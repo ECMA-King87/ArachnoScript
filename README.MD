@@ -18,7 +18,7 @@ The project is still under heavy development, so expect things to change—a lot
 - Virtual Machine (Coming Soon)
 - Native Compiler (Planned for v1.0)
 
-##vVision
+## Vision
 
 ArachnoScript began as a way for me to understand how programming languages work.
 
