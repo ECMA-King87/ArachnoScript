@@ -1,21 +1,21 @@
-# 🕷️ ArachnoScript
+# ArachnoScript
 
 ArachnoScript is a programming language I've been building since early 2025.
 
-It started as an attempt to understand how programming languages work. Somewhere along the way, it became far more than that.
+It started as an attempt to understand how programming languages work. Somewhere along the way, it became much more than that.
 
-Today, ArachnoScript is an active project focused on language design, compiler construction, runtime development and (soon) virtual machines. Every rewrite has taught me something new, and this repository is where all of that comes together.
+Today, ArachnoScript is an active project focused on language design, compiler construction and runtime development. Every rewrite has taught me something new, and this repository is where all of that comes together.
 
-The project is still under heavy development, so expect things to change—a lot.
+The project is still under active development, so expect things to change—sometimes dramatically.
 
-### Current Progress
+## Current Progress
 
 - Lexer
 - Parser
 - AST Interpreter
-- Semantic Analysis
-- Bytecode Compiler (Work in Progress)
-- Virtual Machine (Coming Soon)
+- Basic Semantic Analysis
+- Bytecode Compiler (In Development)
+- Bytecode Virtual Machine (Planned)
 - Native Compiler (Planned for v1.0)
 
 ## Vision
@@ -24,45 +24,61 @@ ArachnoScript began as a way for me to understand how programming languages work
 
 Today, the goal is much bigger.
 
-I want to build a language that people don't just read about—I want them to use it.
+I want to build a language that people don't just read about—I want them to actually use it.
 
-Every feature, rewrite and design decision moves ArachnoScript closer to becoming a language that's enjoyable to write, practical to build with and rewarding to explore.
+Every rewrite, every feature and every design decision brings ArachnoScript one step closer to becoming a language that's practical, enjoyable and worth building with.
 
-## Design
+## Design Philosophy
 
 One thing that's important to me is documenting why the language changes, not just what changes.
 
-Important design decisions are recorded as Architecture Decision Records (ADRs). That way anyone can see the reasoning behind new features, rewrites and language changes.
+Major language decisions are recorded as Architecture Decision Records (ADRs), making it easy to understand the reasoning behind new features, rewrites and changes as the language evolves.
 
 ## Repository
 
-As the project grows you'll find things like:
+As the project grows, this repository will become home to:
 
 - The compiler
 - The runtime
 - The standard library
 - Documentation
-- ADRs
+- Architecture Decision Records
 - Examples
 
-Some parts are still being reorganized as development continues.
+The structure will continue to evolve alongside the language.
 
-## Status
+## Project Status
 
-This project is experimental.
+ArachnoScript is an active project.
 
-Things will break.
+Features may change.
 
-Features may disappear.
+Large parts of the implementation may be rewritten.
 
-Entire subsystems may get rewritten.
+That's simply part of building a programming language.
 
-That's all part of the journey.
+## Follow the Journey
 
-Follow the Journey
+I build ArachnoScript in public and regularly share progress updates, language design discussions and development logs.
 
-I regularly post development updates, language design discussions and progress reports while building ArachnoScript in public.
+If you're interested in programming languages, compilers, interpreters or runtime systems, I'd love to have you follow the journey.
 
-If you're interested in compilers, interpreters or programming language design, you're welcome to follow along.
+## Contributing
 
-"Every programming language starts with a single token."
+Feedback, ideas, bug reports and discussions are always welcome.
+
+## Author
+
+**Uthman Odunbaku (ECMA King)**
+
+I'm a programmer with a passion for programming language design, compiler engineering and runtime systems. ArachnoScript is my biggest project, and I'm documenting the journey as I build it.
+
+## Find Me
+
+- GitHub: <https://github.com/ECMA-King87>
+- Facebook (ECMA King): <https://www.facebook.com/ecmaking57>
+- Facebook (Uthman Odunbaku): <https://www.facebook.com/UthmanOdunbaku>
+- Discord: <https://discord.gg/GEqvNAVyCP>
+- Medium: <https://medium.com/@ecmaking87>
+
+"Every programming language starts with an idea. ArachnoScript started with a question."
