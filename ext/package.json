@@ -1,0 +1,33 @@
+{
+  "name": "arachnoscript-language-features",
+  "displayName": "ArachnoScript Code Editor (ACE)",
+  "description": "ArachnoScript Language Features.",
+  "version": "0.0.1",
+  "publisher": "ECMA King",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "arachnoscript",
+        "extensions": [
+          ".as"
+        ],
+        "aliases": [
+          "as",
+          "ArachnoScript"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "arachnoscript",
+        "path": "./snippets.json"
+      }
+    ]  }
+}
