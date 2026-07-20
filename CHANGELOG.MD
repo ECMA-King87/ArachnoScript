@@ -20,7 +20,7 @@ This repository continues the development of ArachnoScript in a new home. Change
 - Development is now tracked from this repository.
 - Project structure and documentation have been reorganized.
 
-#s Previous History
+## Previous History
 
 The following milestones were completed before this repository was created:
 
