@@ -233,7 +233,7 @@ func (ctx *EvalContext) getMember(obj *Object, keyVal *String) Value {
 	}
 	if desc.getter != nil {
 		fnCtx := NewContext(NewFunctionScope(desc.getter, this))
-		ctx.declareParams(desc.getter, Args{}, fnCtx)
+		ctx.declareParams(desc.getter, []Node{}, Args{}, fnCtx)
 		fnCtx.init("this", this, ConstDecl, desc.getter.Loc)
 		return ctx.execFrame(desc.getter, fnCtx)
 	} else if desc.setter != nil {
@@ -251,7 +251,7 @@ func (ctx *EvalContext) setMember(obj *Object, keyVal *String, value Value, scop
 	}
 	if desc.setter != nil {
 		fnCtx := NewContext(NewFunctionScope(desc.setter, this))
-		ctx.declareParams(desc.setter, Args{value}, fnCtx)
+		ctx.declareParams(desc.setter, []Node{}, Args{value}, fnCtx)
 		fnCtx.init("this", this, ConstDecl, desc.setter.Loc)
 		ctx.execFrame(desc.setter, fnCtx)
 	}
@@ -298,8 +298,15 @@ func (*EvalContext) evalString(str string) *String {
 }
 
 func (ctx *EvalContext) evalUnaryExpr(node Node) Number {
-	operand := node.Data.(parser.OperandExpr).Operand
+	expr := node.Data.(parser.OpOpExpr)
+	operand := expr.Operand
 	v := ctx.EvalExpr(operand)
+	if expr.Op == parser.PLUS {
+		if ctx.typeof(v) != StringType {
+			ctx.errorWithSource(TypeError, ctx.path, node.Loc, "The operand of '+' operator must be of type string.")
+		}
+		return Number(lib.ParseNumber(v.(*String).string))
+	}
 	if ctx.typeof(v) != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, node.Loc, "The operand of '-' operator must be of type number.")
 	}
@@ -578,7 +585,7 @@ func (ctx *EvalContext) evalCallExpr(node parser.Node) Value {
 	caller := expr.Caller
 	callerVal := ctx.EvalExpr(caller)
 	args := ctx.evalArgs(expr.Args)
-	return ctx.callWithThis(callerVal, callerVal, args, &node.Loc)
+	return ctx.callWithThis(callerVal, callerVal, expr.Args, args, &node.Loc)
 }
 
 func (ctx *EvalContext) evalArgs(args []parser.Node) Args {
@@ -600,7 +607,7 @@ func (ctx *EvalContext) evalArgs(args []parser.Node) Args {
 	return argsVals
 }
 
-func (ctx *EvalContext) callWithThis(fun, thisVal Value, args Args, loc *parser.Loc) Value {
+func (ctx *EvalContext) callWithThis(fun, thisVal Value, argsNodes []Node, args Args, loc *parser.Loc) Value {
 	callEnv := ctx.Scope
 start:
 	switch fn := fun.(type) {
@@ -617,7 +624,7 @@ start:
 		} else {
 			fnCtx.init("this", NewObject(), ConstDecl, fn.Loc)
 		}
-		ctx.declareParams(fn, args, fnCtx)
+		ctx.declareParams(fn, argsNodes, args, fnCtx)
 		return ctx.execFrame(fn, fnCtx)
 	case *Macro:
 		return fn.call(args, ctx, loc)
@@ -720,15 +727,17 @@ func (ctx *EvalContext) stackOverFlow() {
 	panic("unimplemented")
 }
 
-func (ctx *EvalContext) declareParams(fn *Function, args Args, fnCtx *EvalContext) {
+func (ctx *EvalContext) declareParams(fn *Function, argsNodes []Node, args Args, fnCtx *EvalContext) {
 	paramsLen := len(fn.params)
 	argsLen := len(args)
 	for i, p := range fn.params {
 		var value Value = undefined
+		var argNode Node
 		if i < argsLen {
 			value = args[i]
+			argNode = argsNodes[i]
 		}
-		if fnCtx.declareParam(p, p, value, i, args, ctx.Scope) {
+		if fnCtx.declareParam(p, argNode, value, i, args, ctx.Scope) {
 			// rest parameter
 			if i != paramsLen-1 {
 				fnCtx.errorWithSource(SyntaxError, fnCtx.path, p.Loc, "A rest parameter must be last in a parameter list.")

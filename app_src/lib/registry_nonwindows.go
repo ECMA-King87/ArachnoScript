@@ -2,10 +2,10 @@
 
 package lib
 
-func readWindowsRegistryValue(keyPath string, valueName string) (string, error) {
+func readWindowsRegistryValue(_ string, _ string) (string, error) {
 	return "", nil
 }
 
-func writeWindowsRegistryValue(keyPath string, valueName string, value string) error {
+func writeWindowsRegistryValue(_ string, _ string, _ string) error {
 	return nil
 }

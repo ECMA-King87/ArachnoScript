@@ -89,6 +89,7 @@ func init() {
 
 	defNud(BITNOT, parse_bitnot_expr)
 	defNud(MINUS, parse_unary_expr)
+	defNud(PLUS, parse_unary_expr)
 
 	defLed(PLUS, parse_binary_expr, ADDITIVE_BP)
 	defLed(MINUS, parse_binary_expr, ADDITIVE_BP)
@@ -1226,7 +1227,17 @@ func parse_bitwise_expr(p *Parser, operand Node, bp BindingPower) Node {
 }
 
 func parse_unary_expr(p *Parser) Node {
-	return parse_operand_expr(p, MINUS, UNARY_BP, T_UNARY)
+	op := p.eat() // + | -
+	operand := p.parseExpr(UNARY_BP)
+	return Node{
+		Tag:      T_UNARY,
+		Children: nil,
+		Data: OpOpExpr{
+			Operand: operand,
+			Op:      op.tag,
+		},
+		Loc: p.loc(op.loc, operand.Loc),
+	}
 }
 
 func parse_bitnot_expr(p *Parser) Node {

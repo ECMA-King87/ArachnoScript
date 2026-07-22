@@ -252,6 +252,11 @@ type LROpExpr struct {
 	Op  TokenTag
 }
 
+type OpOpExpr struct {
+	Operand Node
+	Op      TokenTag
+}
+
 type MemberExpr struct {
 	Object   Node
 	Member   Node
