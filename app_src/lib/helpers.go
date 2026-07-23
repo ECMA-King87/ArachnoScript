@@ -43,7 +43,7 @@ func SourceWithinRange(
 	path int,
 	loc Loc,
 ) string {
-	var lines []string = SplitStr(string(ReadCachedFile(path)), EOL)
+	var lines []string = SplitStr(string(ReadCachedFile(path)), "\n")
 	count := min(loc.End-loc.Start, 500)
 	sourceAtRange := ""
 	for i := range lines {
@@ -53,10 +53,10 @@ func SourceWithinRange(
 			break
 		}
 		line := TrimStr(lines[index])
-		if (index + 1) == loc.Line {
+		if index+1 == loc.Line {
 			line_source := NewStringBuilder()
 			leading_source := Sprintf("\x1b[33;1m%d |\x1b[0m  ", loc.Line)
-			distance := int(loc.Col-1) + (len(leading_source) - 11) - (len(lines[index]) - len(line))
+			distance := int(loc.Col) + VisibleLen(leading_source) - (len(lines[index]) - len(line))
 			line_source.WriteString(Repeat(" ", distance))
 			// ---------------- ^ ----------------
 			// TODO: This will not go well with multiline source, so find a solution.
@@ -72,7 +72,7 @@ func SourceWithinRange(
 			line_source.WriteString(EOL)
 			sourceAtRange = Sprintf("%s%s%s%s", leading_source, line, EOL, line_source.String())
 		}
-		if (index + 1) > loc.Line {
+		if index+1 > loc.Line {
 			sourceAtRange += EOL + line
 		}
 	}
@@ -81,6 +81,10 @@ func SourceWithinRange(
 
 func SourceLog(path int, loc Loc) string {
 	return SourceWithinRange(path, loc)
+}
+
+func VisibleLen(str string) int {
+	return len(StripANSI(str))
 }
 
 const LIBPATH_ENV_KEY = "ARE_LIB_PATH"
@@ -142,18 +146,18 @@ func ValueOf(v any) reflect.Value {
 	return val
 }
 
-func ReflectSet(x, v any) {
-	v1 := reflect.ValueOf(x)
-	v2 := reflect.ValueOf(v)
-	switch x.(type) {
-	case bool, string, int, float32, float64,
-		complex128, int64, int16, int8, int32,
-		uint64, uint16, uint8, uint32:
-		x = v
-	default:
-		v1.Set(v2)
-	}
-}
+// func ReflectSet(x, v any) {
+// 	v1 := reflect.ValueOf(x)
+// 	v2 := reflect.ValueOf(v)
+// 	switch x.(type) {
+// 	case bool, string, int, float32, float64,
+// 		complex128, int64, int16, int8, int32,
+// 		uint64, uint16, uint8, uint32:
+// 		x = v
+// 	default:
+// 		v1.Set(v2)
+// 	}
+// }
 
 func PointerOf(v any) uintptr {
 	val := reflect.ValueOf(v)

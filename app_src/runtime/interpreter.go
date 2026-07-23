@@ -29,7 +29,7 @@ func (ctx *EvalContext) evalIfStmt(node Node) *Undefined {
 	stmt := node.Data.(parser.IfStmt)
 	condNode := stmt.Condition
 	var condition Boolean = false
-	blockCtx := NewContext(NewScope(ctx.Scope, ctx.objectHash, BlockScope, -1))
+	blockCtx := NewContext(NewScope(ctx.Scope, ctx.objectHash, BlockScope, 0))
 	switch condNode.Tag {
 	case parser.T_VARDECL:
 		decl := condNode.Data.(parser.VarDecl)
@@ -56,7 +56,7 @@ func (ctx *EvalContext) evalWhileStmt(node Node) *Undefined {
 	var d parser.Decl
 
 	for {
-		blockCtx := NewContext(NewScope(ctx.Scope, ctx.objectHash, LoopScope, -1))
+		blockCtx := NewContext(NewScope(ctx.Scope, ctx.objectHash, LoopScope, 0))
 		if stmt.Do {
 			_, _, br := blockCtx.ExecBlock(body)
 			if br {
@@ -86,7 +86,7 @@ func (ctx *EvalContext) evalWhileStmt(node Node) *Undefined {
 			}
 			if condition {
 				blockCtx.ExecBlock(body)
-				if blockCtx.invalid {
+				if !blockCtx.valid {
 					break
 				}
 			} else {
@@ -129,7 +129,7 @@ func (ctx *EvalContext) evalReturnStmt(node Node) *Undefined {
 }
 
 func (*EvalContext) evalBlockStmt(scope *Scope, node Node) Value {
-	blockCtx := NewContext(NewScope(scope, UndefinedHash, BlockScope, -1))
+	blockCtx := NewContext(NewScope(scope, UndefinedHash, BlockScope, 0))
 	blockCtx.ExecBlock(node.Children)
 	blockCtx.invalidate()
 	return undefined
@@ -615,7 +615,7 @@ start:
 		fun = fn.value()
 		goto start
 	case *Function:
-		fnCtx := NewContext(NewScope(fn.declScope, getValueHash(thisVal), FunctionScope, -1))
+		fnCtx := NewContext(NewScope(fn.declScope, getValueHash(thisVal), FunctionScope, 0))
 		if fn.async {
 			callEnv.errorWithSource(BuildError, callEnv.path, *loc, "Async functions are not functional yet.")
 		}

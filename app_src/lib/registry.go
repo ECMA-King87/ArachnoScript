@@ -27,10 +27,15 @@ func ReadRegistryValue(keyPath string, valueName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	targetFile := JoinPaths(home, ".bashrc")
-	file, err := os.Open(targetFile)
+	file, err := OpenFile(JoinPaths(home, ".bashrc"))
 	if err != nil {
-		return "", err
+		file, err = OpenFile(JoinPaths(home, ".bash_profile"))
+		if err != nil {
+			file, err = OpenFile(JoinPaths(home, ".zshrc"))
+			if err != nil {
+				return "", err
+			}
+		}
 	}
 	defer file.Close()
 

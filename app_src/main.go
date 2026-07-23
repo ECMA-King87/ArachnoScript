@@ -3,8 +3,9 @@ package main
 import "aspire/are/main/runtime"
 
 func main() {
-	var ARE = runtime.NewRuntime(false)
-	w := ARE.Worker("main.as", true)
-	w.Run()
+	runtime.SetupARE()
+	var ARE = runtime.NewRuntime()
+	w := ARE.Worker(false)
+	w.ExecModule(ARE.ParseModule("main.as", true, false, false).OwnModule)
 	// runtime.REPL()
 }

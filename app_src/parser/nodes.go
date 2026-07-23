@@ -27,9 +27,9 @@ const (
 	PRIMARY_BP
 )
 
-type stmtHandler func(*Parser) Node
-type nudHandler func(*Parser) Node
-type ledHandler func(*Parser, Node, BindingPower) Node
+type stmtHandler func(*ModuleParser) Node
+type nudHandler func(*ModuleParser) Node
+type ledHandler func(*ModuleParser, Node, BindingPower) Node
 
 // type typeNudHandler func(*Parser) Node
 // type typeLedHandler func(*Parser, Node, BindingPower) Node
@@ -207,8 +207,8 @@ const (
 )
 
 type Program struct {
-	Main    Module
-	Modules []*Module
+	Main    *Module
+	Modules map[int]*Module
 }
 
 type Module struct {

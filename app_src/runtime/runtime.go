@@ -180,8 +180,10 @@ func (str *String) inspect(d uint, _ ValueInspector) string {
 
 // ############# Boolean #############
 
-var True Boolean = true
-var False Boolean = false
+var (
+	True  Boolean = true
+	False Boolean = false
+)
 
 func (Boolean) typeof() string {
 	return BooleanType
@@ -502,7 +504,7 @@ func (arr *Array) inspect(d uint, Inspector ValueInspector) string {
 			str = v.inspect(d+1, Inspector)
 		}
 		els = append(els, str)
-		l := visibleLen(str)
+		l := lib.VisibleLen(str)
 		if l > 20 {
 			shouldFormatPretty = false
 		} else {
@@ -517,7 +519,7 @@ func (arr *Array) inspect(d uint, Inspector ValueInspector) string {
 	}
 	for i, str := range els {
 		col := i % 4
-		strLen := visibleLen(str)
+		strLen := lib.VisibleLen(str)
 		if shouldIndent {
 			if shouldFormatPretty && col == 0 {
 				b.WriteString(lib.Repeat("  ", int(d+1)))
@@ -564,10 +566,6 @@ func NewArray() *Array {
 		hash:     0,
 		elements: &lib.Array[Value]{},
 	}
-}
-
-func visibleLen(str string) int {
-	return len(lib.StripANSI(str))
 }
 
 // ###############################################

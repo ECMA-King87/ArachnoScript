@@ -13,27 +13,56 @@ type (
 		queue []Value
 	}
 	Runtime struct {
-		isRepl bool
 	}
 	Worker struct {
 		runtime   *Runtime
 		callstack *lib.Array[CallFrame]
 		stack     *lib.Array[Value]
 		// *parser.Program
-		*parser.Parser
+		// *parser.ModuleParser
+		// modulePath string
 		TaskQueue
 		MicroTaskQueue
+		// Used in the REPL
+		progCtx   *EvalContext
+		isRepl    bool
 		_break    bool
-		invalid   bool
 		returned  bool
 		_continue bool
 		terminate bool
 	}
 )
 
-func NewRuntime(isRepl bool) *Runtime {
+func SetupARE() {
+	// TODO: this implementation is not cross platform.
+	if !lib.DEBUG_MODE {
+		value, err := lib.ReadRegistryValue("Environment", "Path")
+		if err == nil {
+			execPath := lib.DirOf(lib.ExecPath())
+			if value == "" {
+				lib.WriteRegistryValue("Environment", "Path", execPath)
+			} else {
+				found := false
+				for _, path := range lib.SplitStr(value, ";") {
+					if lib.EqualFold(lib.CleanPath(path), execPath) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					lib.WriteRegistryValue("Environment", "Path", lib.Sprint(value, ";", execPath))
+				}
+			}
+		}
+	}
+}
+
+func init() {
 	initMacros()
-	return &Runtime{isRepl}
+}
+
+func NewRuntime() *Runtime {
+	return &Runtime{}
 }
 
 type EvalContext struct {
@@ -45,23 +74,33 @@ func NewContext(scope *Scope) *EvalContext {
 	return &EvalContext{Worker: scope.worker, Scope: scope}
 }
 
-func (r *Runtime) Worker(path string, builtin bool) *Worker {
-	var p *parser.Parser
+func (r *Runtime) Worker(isRepl bool) *Worker {
+	return newWorker(r, isRepl)
+}
+
+func (*Runtime) ParseModule(path string, builtin, isMain, isRepl bool) (p *parser.ModuleParser) {
 	if builtin {
 		p = parser.NewBuiltinsParser(path)
 	} else {
-		p = parser.NewParser(path, r.isRepl)
+		p = parser.NewModuleParser(path, isMain, isRepl)
 	}
 	p.Parse()
+	return
+}
+
+func newWorker(r *Runtime, isRepl bool) *Worker {
 	return &Worker{
-		Parser:         p,
-		TaskQueue:      TaskQueue{},
-		MicroTaskQueue: MicroTaskQueue{},
+		TaskQueue:      TaskQueue{queue: []Value{}},
+		MicroTaskQueue: MicroTaskQueue{queue: []Value{}},
 		runtime:        r,
 		callstack:      lib.NewArray[CallFrame](10),
 		stack:          lib.NewArray[Value](1),
-		invalid:        p.Invalid,
+		progCtx:        nil,
+		isRepl:         isRepl,
 		returned:       false,
+		_break:         false,
+		_continue:      false,
+		terminate:      false,
 	}
 }
 
@@ -75,11 +114,11 @@ func (w *Worker) crash() {
 
 var UndefinedHash = hashValue(undefined)
 var globalThis = func() *ScopeObject {
-	scopeObject := &ScopeObject{NewScope(nil, UndefinedHash, GlobalScope, -1), null}
+	scopeObject := &ScopeObject{NewScope(nil, UndefinedHash, GlobalScope, 0), null}
 	scopeObject.init("null", null, ConstDecl, lib.DumbyLoc)
 	scopeObject.init("undefined", undefined, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("true", Boolean(true), ConstDecl, lib.DumbyLoc)
-	scopeObject.init("false", Boolean(false), ConstDecl, lib.DumbyLoc)
+	scopeObject.init("true", True, ConstDecl, lib.DumbyLoc)
+	scopeObject.init("false", False, ConstDecl, lib.DumbyLoc)
 	scopeObject.init("Infinity", Infinity, ConstDecl, lib.DumbyLoc)
 	scopeObject.init("NaN", NaN, ConstDecl, lib.DumbyLoc)
 	scopeObject.init("#_stdin", MK_RAW(lib.Stdin), ConstDecl, lib.DumbyLoc)
@@ -87,46 +126,80 @@ var globalThis = func() *ScopeObject {
 	return scopeObject
 }()
 
-func (w *Worker) Run() {
+func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 	defer func() {
 		err := recover()
 		if err != nil {
 			lib.Println(err)
 		}
 	}()
-	if !w.invalid {
-		w.ExecModule(w.Parser.OwnModule)
+	if w.progCtx == nil {
+		progScope := NewScope(globalThis.Scope, UndefinedHash, ModuleScope, 0)
+		progScope.path = prog.Path
+		progScope.worker = w
+		w.progCtx = NewContext(progScope)
 	}
-}
-
-func (w *Worker) ExecModule(prog *parser.Module) {
-	progScope := NewScope(globalThis.Scope, UndefinedHash, ModuleScope, -1)
-	progScope.path = prog.Path
-	progScope.worker = w
-	ctx := NewContext(progScope)
-	// exports :=
+	ctx := w.progCtx
 	progLen := len(prog.Body)
-	for i := 0; i < progLen && progScope.valid; i++ {
+	exports = NewObject()
+	for i := 0; i < progLen && ctx.valid; i++ {
 		node := prog.Body[i]
-		var rtv Value = undefined
+		var val Value = undefined
 		switch node.Tag {
 		case parser.T_IMPORT:
-			progScope.error(BuildError, "Import statements uimplemented.", lib.EOL)
+			stmt := node.Data.(parser.ImportStmt)
+			key := parser.GlobalParser.Imports[stmt.From]
+			lib.Assert(key != 0)
+			module := parser.GlobalParser.Program.Modules[key]
+			if stmt.UseCurrentContext {
+				origPath := ctx.path
+				ctx.path = key
+				exps := w.ExecModule(module)
+				exports.own.Copy(exps.own)
+				ctx.path = origPath
+			} else {
+				worker := newWorker(w.runtime, false)
+				exps := worker.ExecModule(module)
+				if stmt.Named.Tag != parser.T_INVALID {
+					names := stmt.Named.Data.(parser.ObjectLiteral)
+					for i, K := range names.Keys {
+						alias := names.Props[i]
+						name := ""
+						var key *String
+						switch K.Tag {
+						case parser.T_IDENT:
+							if alias.Tag == parser.T_INVALID {
+								name = string(K.Data.(parser.Identifier))
+								break
+							}
+							fallthrough
+						default:
+							name = string(alias.Data.(parser.Identifier))
+							key = NewString(name)
+						}
+						var value Value = undefined
+						if pd, ok := exports.own.Get(key); ok {
+							value = pd.value
+						}
+						ctx.init(name, value, ConstDecl, node.Loc)
+					}
+				}
+				if stmt.Namespace != "" {
+					ctx.init(stmt.Namespace, exps, ConstDecl, node.Loc)
+				}
+			}
 		case parser.T_EXPORT:
-			progScope.error(BuildError, "Export statements uimplemented.", lib.EOL)
+			ctx.errorWithSource(BuildError, 0, node.Loc, "Export statements unimplemented.")
 		case parser.T_LABEL:
 			ctx.EvalLabel(&i, node, prog.Body)
 		default:
-			if i == progLen-1 {
-				rtv = ctx.EvalStmt(node)
-			} else {
-				ctx.EvalStmt(node)
-			}
+			val = ctx.EvalStmt(node)
 		}
-		if ctx.runtime.isRepl {
-			lib.Stdout.WriteString(ctx.Inspect(rtv) + lib.EOL)
+		if w.isRepl {
+			lib.Stdout.WriteString(w.Inspect(val) + lib.EOL)
 		}
 	}
+	return
 }
 
 func (ctx *EvalContext) ExecBlock(block []parser.Node) (terminate, cont, br bool) {
@@ -150,7 +223,7 @@ func (ctx *EvalContext) ExecBlock(block []parser.Node) (terminate, cont, br bool
 			}
 			break
 		}
-		if ctx.runtime.isRepl {
+		if ctx.isRepl {
 			lib.Stdout.WriteString(ctx.Inspect(rtv) + lib.EOL)
 		}
 	}
@@ -161,8 +234,8 @@ func (ctx *EvalContext) EvalLabel(i *int, node parser.Node, block []parser.Node)
 	*i++
 	label := node.Data.(string)
 	if *i >= len(block) {
-		ctx.error(SyntaxError, "A label must precede a statement.", lib.EOL,
-			"@", label, " does not have a statement to label.", lib.EOL, lib.SourceLog(ctx.path, node.Loc))
+		ctx.errorWithSource(SyntaxError, 0, node.Loc, "A label must precede a statement.", lib.EOL,
+			"@", label, " does not have a statement to label.")
 	}
 	labeled := block[*i]
 	switch label {
@@ -180,7 +253,7 @@ func (ctx *EvalContext) EvalLabel(i *int, node parser.Node, block []parser.Node)
 		d := lib.TimeSince(t)
 		lib.Stdout.WriteString(d.String() + lib.EOL)
 	default:
-		ctx.error(SyntaxError, "Unknown label: ", label, lib.EOL, lib.SourceWithinRange(ctx.path, node.Loc))
+		ctx.errorWithSource(SyntaxError, 0, node.Loc, "Unknown label: ", label)
 	}
 	return undefined
 }
@@ -191,9 +264,9 @@ func (ctx *EvalContext) EvalStmt(node Node) Value {
 	)
 	switch node.Tag {
 	case parser.T_IMPORT:
-		scope.error(SyntaxError, "An import declaration can only be used at the top level of a module.", lib.EOL, lib.SourceLog(scope.path, node.Loc))
+		scope.errorWithSource(SyntaxError, 0, node.Loc, "An import declaration can only be used at the top level of a module.")
 	case parser.T_EXPORT:
-		scope.error(SyntaxError, "An export declaration can only be used at the top level of a module.", lib.EOL, lib.SourceLog(scope.path, node.Loc))
+		scope.errorWithSource(SyntaxError, 0, node.Loc, "An export declaration can only be used at the top level of a module.")
 	case parser.T_BLOCK:
 		return ctx.evalBlockStmt(scope, node)
 	case parser.T_VARDECL:
@@ -246,7 +319,7 @@ func (ctx *EvalContext) EvalExpr(node Node) Value {
 	case parser.T_COMPARE_LIST:
 		return ctx.evalCompareList(node)
 	case parser.T_RESTORSPREAD:
-		scope.error(SyntaxError, "'...' is unexpected here.", lib.EOL, lib.SourceLog(scope.path, node.Loc))
+		scope.errorWithSource(SyntaxError, 0, node.Loc, "'...' is unexpected here.")
 	case parser.T_GROUPING:
 		return ctx.evalGroupingExpr(node)
 	case parser.T_FNDECL:
@@ -262,7 +335,7 @@ func (ctx *EvalContext) EvalExpr(node Node) Value {
 	case parser.T_NOT:
 		return ctx.evalNotExpr(node)
 	default:
-		scope.error(BuildError, "Unhandled AST node.", lib.EOL, lib.SourceLog(scope.path, node.Loc))
+		scope.errorWithSource(BuildError, 0, node.Loc, "Unhandled AST node.")
 	}
 	return null
 }

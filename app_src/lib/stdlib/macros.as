@@ -218,3 +218,5 @@ declare function wasm_get_export(
 ): macro;
 
 declare function wat_to_wasm(bytes: raw<byte[]>): raw<byte[]>;
+
+declare function repl(): void;

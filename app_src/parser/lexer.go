@@ -692,9 +692,9 @@ func (l *Lexer) lexError(errname ErrorName, additionals ...string) {
 	b.WriteString(lib.Sprintf("%s: ", lib.Red(string(name))))
 	switch errname {
 	case UnrecognisedChar:
-		message = lib.Sprintf("Unrecognised character found in source: %d%s", l.char(), lib.SourceLog(l.path, l.Loc()))
+		message = lib.Sprintf("Unrecognised character found in source: %d%s%s", l.char(), lib.EOL, lib.SourceLog(l.path, l.Loc()))
 	case SyntaxError:
-		message = lib.Sprintf("%s%s", additionals[0], lib.SourceLog(l.path, l.loc))
+		message = lib.Sprintf("%s%s%s", additionals[0], lib.EOL, lib.SourceLog(l.path, l.loc))
 		additionals = additionals[1:]
 	default:
 		lib.Panic("unhandled error name")
@@ -708,5 +708,5 @@ func (l *Lexer) lexError(errname ErrorName, additionals ...string) {
 		}
 	}
 	lib.Print(b.String())
-	lib.ExitWith1()
+	panic("Lexer error....")
 }

@@ -104,3 +104,12 @@ func MapEntries[K comparable, V any](m *Map[K, V]) [][2]any {
 	}
 	return slice
 }
+
+func MapHas[K comparable, V any](m map[K]V, key K) bool {
+	for k := range m {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}

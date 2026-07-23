@@ -32,12 +32,12 @@ func UserHomeDir() (string, error) {
 }
 
 // Returns the associated key of the cached path.
-// Returns -1 if there is no such cached path.
+// Returns 0 if there is no such cached path.
 func KeyOfPath(path string) int {
 	if k, ok := paths[path]; ok {
 		return k
 	}
-	return -1
+	return 0
 }
 
 // Returns the path of the cached file with the specified key.
@@ -54,6 +54,7 @@ func PathFromKey(key int) string {
 	return AnonymousPath
 }
 
+// Must be positive
 var lastKey int
 
 // The files is read once and not revalidated.
@@ -62,25 +63,50 @@ func ReadUnchangedFile(path string) ([]byte, int, error) {
 	if !IsAbs(path) {
 		path = Abs(path)
 	}
-	if content, ok := cache[paths[path]]; ok {
-		return content.b, paths[path], nil
+	if k, ok := paths[path]; ok {
+		return cache[k].b, k, nil
 	}
-	content, err := os.ReadFile(path)
 	lastKey++
-	if _, ok := paths[path]; !ok {
-		paths[path] = lastKey
+	paths[path] = lastKey
+	f, err := os.Open(path)
+	if err != nil {
 	}
-	cache[lastKey] = CacheFile{b: content, modTime: 0}
-	return content, paths[path], err
+	defer f.Close()
+	info, err := os.Stat(path)
+	size := int64(0)
+	if err == nil {
+		size = info.Size()
+	}
+	bytes := make([]byte, size)
+	_, err = f.Read(bytes)
+	if err != nil {
+		return []byte{}, 0, err
+	}
+	cache[lastKey] = CacheFile{
+		b:       bytes,
+		modTime: getModTime(info),
+	}
+	return bytes, lastKey, nil
 }
+
+func getModTime(info os.FileInfo) int64 {
+	return info.ModTime().Unix()
+}
+
+var AnonymousCount = 0
 
 // Writes to cache the contents of bytes with the negative integer key as the cache key.
 // key: Must be negative, Anonymous files use negative keys.
-func WriteAnonymousFile(bytes []byte, key int) {
-	if key >= 0 {
+func WriteAnonymousFile(bytes []byte, key int) int {
+	if key > 0 {
 		Println("Bug: anonymous path key is not negative.")
 	}
+	if key == 0 {
+		AnonymousCount--
+		key = AnonymousCount
+	}
 	cache[key] = CacheFile{b: bytes, modTime: 0}
+	return key
 }
 
 func WriteCacheFile(bytes []byte, path string) (key int) {
@@ -111,7 +137,7 @@ func ReadFile(path string) ([]byte, int, error) {
 		return nil, 0, err
 	}
 	if content, ok := cache[paths[path]]; ok {
-		if info.ModTime().Unix() == content.modTime {
+		if getModTime(info) == content.modTime {
 			return content.b, paths[path], nil
 		}
 	}
@@ -120,7 +146,7 @@ func ReadFile(path string) ([]byte, int, error) {
 	if _, ok := paths[path]; !ok {
 		paths[path] = lastKey
 	}
-	cache[lastKey] = CacheFile{b: content, modTime: info.ModTime().Unix()}
+	cache[lastKey] = CacheFile{b: content, modTime: getModTime(info)}
 	return content, paths[path], err
 }
 

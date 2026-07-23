@@ -1,10 +1,10 @@
 package lib
 
 import (
-	// "bufio"
+	"bufio"
 	"fmt"
-	// "os"
-	// "strings"
+	"os"
+	"strings"
 )
 
 func catch[T any](v T, err error) T {
@@ -57,14 +57,12 @@ func Errorf(f string, data ...any) error {
 
 func Prompt(msg string) string {
 	Print(msg)
-	// reader := bufio.NewReader(os.Stdin)
-	// input, err := reader.ReadString('\n')
-	// if err != nil {
-	// 	return string([]byte{0})
-	// }
-	// // trim trailing newline/carriage return
-	// input = strings.TrimRight(input, "\r\n")
-	input := ""
-	fmt.Scanln(&input)
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return string([]byte{0})
+	}
+	// trim trailing newline/carriage return
+	input = strings.TrimRight(input, "\r\n")
 	return input
 }

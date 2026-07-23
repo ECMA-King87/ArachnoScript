@@ -5,7 +5,9 @@ import (
 	"sync"
 )
 
-var wg sync.WaitGroup
+type WaitGroup = sync.WaitGroup
+
+var wg WaitGroup
 
 func Go(f func()) {
 	wg.Go(f)

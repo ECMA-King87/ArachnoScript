@@ -8,5 +8,5 @@ require github.com/tetratelabs/wazero v1.12.0
 
 require (
 	github.com/eliben/watgo v0.8.0
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.44.0
 )

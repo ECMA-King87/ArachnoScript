@@ -123,7 +123,7 @@ func initMacros() {
 			case *String:
 				return MK_RAW([]byte(v.string))
 			default:
-				ctx.errorWithSource(TypeError, -1, *loc, "Argument is not of expected type (number | ...number | string)")
+				ctx.errorWithSource(TypeError, 0, *loc, "Argument is not of expected type (number | ...number | string)")
 			}
 			return undefined
 		}),
@@ -147,7 +147,7 @@ func initMacros() {
 			path := args[0].(*String)
 			file, err := lib.OpenFile(path.string)
 			if err != nil {
-				ctx.errorWithSource(Error, -1, *loc, err.Error())
+				ctx.errorWithSource(Error, 0, *loc, err.Error())
 			}
 			return MK_RAW(file)
 		}),
@@ -155,12 +155,12 @@ func initMacros() {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			file, ok := args[0].(*RAW).value.(lib.File)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileErr)
 			}
 			// Returns an error if already called.
 			err := file.Close()
 			if err != nil {
-				ctx.errorWithSource(TypeError, -1, *loc, err.Error())
+				ctx.errorWithSource(TypeError, 0, *loc, err.Error())
 			}
 			return undefined
 		}),
@@ -169,15 +169,15 @@ func initMacros() {
 			// arg, ok := args[0].(*RAW[lib.File])
 			file, ok := args[0].(*RAW).value.(lib.File)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileErr)
 			}
 			bytes, ok := args[1].(*RAW).value.([]byte)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeByteSliceErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeByteSliceErr)
 			}
 			n, err := file.Read(bytes)
 			if err != nil {
-				ctx.errorWithSource(TypeError, -1, *loc, err.Error())
+				ctx.errorWithSource(TypeError, 0, *loc, err.Error())
 			}
 			return Number(n)
 		}),
@@ -185,15 +185,15 @@ func initMacros() {
 			expectArgs(args, []string{RawType, RawType}, ctx, loc)
 			file, ok := args[0].(*RAW).value.(lib.File)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileErr)
 			}
 			bytes, ok := args[1].(*RAW).value.([]byte)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeByteSliceErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeByteSliceErr)
 			}
 			n, err := file.Write(bytes)
 			if err != nil {
-				ctx.errorWithSource(TypeError, -1, *loc, err.Error())
+				ctx.errorWithSource(TypeError, 0, *loc, err.Error())
 			}
 			return Number(n)
 		}),
@@ -201,11 +201,11 @@ func initMacros() {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			file, ok := args[0].(*RAW).value.(lib.File)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileErr)
 			}
 			stat, err := file.Stat()
 			if err != nil {
-				ctx.errorWithSource(TypeError, -1, *loc, err.Error())
+				ctx.errorWithSource(TypeError, 0, *loc, err.Error())
 			}
 			return MK_RAW(stat)
 		}),
@@ -213,7 +213,7 @@ func initMacros() {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			stat, ok := args[0].(*RAW).value.(lib.FileInfo)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileStatErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileStatErr)
 			}
 			return Number(stat.Size())
 		}),
@@ -221,7 +221,7 @@ func initMacros() {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			stat, ok := args[0].(*RAW).value.(lib.FileInfo)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileStatErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileStatErr)
 			}
 			return NewString(stat.Name())
 		}),
@@ -229,7 +229,7 @@ func initMacros() {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			stat, ok := args[0].(*RAW).value.(lib.FileInfo)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileStatErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileStatErr)
 			}
 			return Boolean(stat.IsDir())
 		}),
@@ -237,7 +237,7 @@ func initMacros() {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			stat, ok := args[0].(*RAW).value.(lib.FileInfo)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeFileStatErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeFileStatErr)
 			}
 			return Number(stat.ModTime().Unix())
 		}),
@@ -247,7 +247,7 @@ func initMacros() {
 			indent := args[1].(Boolean)
 			json, err := JSONStringify(v, bool(indent))
 			if err != nil {
-				ctx.errorWithSource(Error, -1, *loc, err.Error())
+				ctx.errorWithSource(Error, 0, *loc, err.Error())
 			}
 			return json
 		}),
@@ -261,7 +261,7 @@ func initMacros() {
 			arg := float64(args[1].(Number))
 			if lib.Modulo(arg, 1) != 0 {
 				if lib.ENV.StrictMode {
-					ctx.errorWithSource(TypeError, -1, *loc, FloatArrIndexErr)
+					ctx.errorWithSource(TypeError, 0, *loc, FloatArrIndexErr)
 				} else {
 					arg = lib.TruncFloat(arg)
 				}
@@ -304,7 +304,7 @@ func initMacros() {
 					if idx < 0 {
 						i = v.elements.Len() - idx
 					}
-					ctx.errorWithSource(TypeError, -1, *loc, lib.Sprintf("Element at index %d (%d) does not exist.", idx, i))
+					ctx.errorWithSource(TypeError, 0, *loc, lib.Sprintf("Element at index %d (%d) does not exist.", idx, i))
 				}
 			}
 			return undefined
@@ -316,15 +316,15 @@ func initMacros() {
 			expectArgs(args, []string{RawType, RawType}, ctx, loc)
 			runtime, ok := args[0].(*RAW).value.(*lib.WebAssembly)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeWASMRuntimeErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeWASMRuntimeErr)
 			}
 			bytes, ok := args[1].(*RAW).value.([]byte)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeByteSliceErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeByteSliceErr)
 			}
 			module, err := lib.WASMCompileModule(runtime, bytes)
 			if err != nil {
-				ctx.errorWithSource(Error, -1, *loc, err.Error())
+				ctx.errorWithSource(Error, 0, *loc, err.Error())
 			}
 			return MK_RAW(module)
 		}),
@@ -334,26 +334,26 @@ func initMacros() {
 				expectArgs(args, []string{RawType, RawType}, ctx, loc)
 				bytes, ok := v.([]byte)
 				if !ok {
-					ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeByteSliceErr)
+					ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeByteSliceErr)
 				}
 				runtime, ok := args[1].(*RAW).value.(*lib.WebAssembly)
 				if !ok {
-					ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeWASMRuntimeErr)
+					ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeWASMRuntimeErr)
 				}
 				inst, err := lib.WASMInstantiate(runtime, bytes)
 				if err != nil {
-					ctx.errorWithSource(Error, -1, *loc, err.Error())
+					ctx.errorWithSource(Error, 0, *loc, err.Error())
 				}
 				return MK_RAW(inst)
 			}
 			expectArgs(args, []string{RawType}, ctx, loc)
 			module, ok := v.(lib.Module)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeWASMModErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeWASMModErr)
 			}
 			inst, err := lib.WASMInstantiateModule(module)
 			if err != nil {
-				ctx.errorWithSource(Error, -1, *loc, err.Error())
+				ctx.errorWithSource(Error, 0, *loc, err.Error())
 			}
 			return MK_RAW(inst)
 		}),
@@ -361,42 +361,57 @@ func initMacros() {
 			expectArgs(args, []string{RawType, StringType}, ctx, loc)
 			inst, ok := args[0].(*RAW).value.(lib.Instance)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeWASMRuntimeErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeWASMRuntimeErr)
 			}
 			name := args[1].(*String).string
 			fun, found := lib.GetWASMExport(inst, name)
 			if !found {
-				ctx.errorWithSource(Error, -1, *loc, "No export function with name: ", name)
+				ctx.errorWithSource(Error, 0, *loc, "No export function with name: ", name)
 			}
 			return MK_MACRO("wasm_"+name, func(args Args, ctx *EvalContext, loc *lib.Loc, m *Macro) Value {
 				wasmArgs := make([]uint64, len(args))
 				for i := range len(args) {
 					valType := args[i].typeof()
 					if valType != NumberType {
-						ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeWASMRuntimeErr)
+						ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeWASMRuntimeErr)
 						errorOnMismatch(valType, NumberType, i+1, ctx, loc)
 					}
 					wasmArgs[i] = uint64(args[i].(Number))
 				}
 				res, err := fun.Call(wasmArgs...)
 				if err != nil {
-					ctx.errorWithSource(Error, -1, *loc, err.Error())
+					ctx.errorWithSource(Error, 0, *loc, err.Error())
 				}
-				return MK_RAW(res)
+				if len(res) == 1 {
+					return Number(res[0])
+				}
+				arr := NewArray()
+				for _, el := range res {
+					arr.push(Number(el))
+				}
+				return arr
 			})
 		}),
 		MK_MACRO("wat_to_wasm", func(args Args, ctx *EvalContext, loc *lib.Loc, m *Macro) Value {
 			expectArgs(args, []string{RawType}, ctx, loc)
 			watBytes, ok := args[0].(*RAW).value.([]byte)
 			if !ok {
-				ctx.errorWithSource(TypeError, -1, *loc, ArgMustBeByteSliceErr)
+				ctx.errorWithSource(TypeError, 0, *loc, ArgMustBeByteSliceErr)
 			}
 			wasmBytes, err := lib.WAT2WASM(watBytes)
 			if err != nil {
-				ctx.errorWithSource(Error, -1, *loc, err.Error())
+				ctx.errorWithSource(Error, 0, *loc, err.Error())
 			}
 			return MK_RAW(wasmBytes)
 		}),
+		MK_MACRO("repl", func(_ Args, ctx *EvalContext, loc *lib.Loc, m *Macro) Value {
+			REPL()
+			return undefined
+		}),
+		// MK_MACRO("name", func(args Args, ctx *EvalContext, loc *lib.Loc, m *Macro) Value {
+		// 	expectArgs(args, []string{NumberType}, ctx, loc)
+		// 	return undefined
+		// }),
 	}
 	for _, m := range MACROS {
 		globalThis.init("#_"+m.name, m, ConstDecl, lib.DumbyLoc)

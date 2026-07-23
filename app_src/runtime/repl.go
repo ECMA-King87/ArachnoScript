@@ -2,18 +2,19 @@ package runtime
 
 import (
 	"aspire/are/main/lib"
+	"aspire/are/main/parser"
 )
 
 func sessionFilePath(home string, timestamp int64) string {
 	return lib.JoinPaths(home, "Documents", "are-session-"+lib.Sprint(timestamp)+".txt")
 }
 
-// The REPL is inefficient and young.
 func REPL() {
 	lib.Print(lib.Version())
-	r := NewRuntime(true)
+	r := NewRuntime()
 	session := lib.NewStringBuilder()
 	d_pressed := false
+	w := r.Worker(true)
 	for {
 		input := lib.Prompt(lib.Magenta(">> "))
 		if input == "" {
@@ -47,9 +48,12 @@ func REPL() {
 			}
 			continue
 		}
-		w := r.Worker(input, false)
-		w.Run()
+		p := parser.NewModuleParser(input, true, true)
+		p.Parse()
+		// TODO: Sometimes the source log does not display a source.
+		w.ExecModule(p.OwnModule)
 		session.WriteString(input)
+		session.WriteString(lib.EOL)
 		d_pressed = false
 	}
 }

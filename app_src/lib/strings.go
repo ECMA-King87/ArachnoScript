@@ -120,12 +120,16 @@ func Match(pattern string, str string) bool {
 // ANSI regular expression pattern targeting control sequences
 const ansiPattern = "[\u001B\u009B]\\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-mA-ORZcf-nqry=><]"
 
-var re = regexp.MustCompile(ansiPattern)
+var ansiPatternRegex = regexp.MustCompile(ansiPattern)
 
 func StripANSI(str string) string {
-	return re.ReplaceAllString(str, "")
+	return ansiPatternRegex.ReplaceAllString(str, "")
 }
 
 func ReplaceStr(str, old, new string, n int) string {
 	return strings.Replace(str, old, new, n)
+}
+
+func EqualFold(s, t string) bool {
+	return strings.EqualFold(s, t)
 }

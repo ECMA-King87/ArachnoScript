@@ -44,10 +44,12 @@ type Scope struct {
 func NewScope(parent *Scope, object uint64, of lib.Enum, path int) *Scope {
 	var worker *Worker
 	if parent != nil {
-		if path == -1 {
+		if path == 0 {
 			path = parent.path
 		}
 		worker = parent.worker
+	} else if path == 0 {
+		path = -1
 	}
 	return &Scope{
 		memory:     []Value{},
@@ -64,12 +66,12 @@ func NewScope(parent *Scope, object uint64, of lib.Enum, path int) *Scope {
 }
 
 func NewFunctionScope(function *Function, this *Object) *Scope {
-	return NewScope(function.declScope, hashValue(this), FunctionScope, -1)
+	return NewScope(function.declScope, hashValue(this), FunctionScope, 0)
 }
 
 func (s *Scope) declare(name string, varType DeclType, loc parser.Loc) int {
 	if s.names.Has(name) {
-		s.error(SyntaxError, lib.Sprintf("Cannot redeclare variable '%s'.%s%s", name, lib.EOL, lib.SourceLog(s.path, loc)))
+		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name))
 	}
 	ptr := len(s.memory)
 	s.memory = append(s.memory, undefined)
@@ -79,11 +81,11 @@ func (s *Scope) declare(name string, varType DeclType, loc parser.Loc) int {
 }
 
 func (s *Scope) init(name string, value Value, varType DeclType, loc parser.Loc) Value {
-	if s.path == -1 && s.of != GlobalScope {
+	if s.path == 0 && s.of != GlobalScope {
 		s.error(BuildError, "Scope path is uninitialized: "+name)
 	}
 	if s.names.Has(name) {
-		s.error(SyntaxError, lib.Sprintf("Cannot redeclare variable '%s'.%s%s", name, lib.EOL, lib.SourceLog(s.path, loc)))
+		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name))
 	}
 	ptr := len(s.memory)
 	s.names.Set(name, ptr)
@@ -96,11 +98,11 @@ func (s *Scope) getValue(name string, loc *parser.Loc) Value {
 	scope := s.resolve(name, s, loc)
 	ptr, _ := scope.names.Get(name)
 	if ptr == -1 {
-		s.error(SyntaxError, "Variable '", name, "' used before being initialized.", lib.EOL, lib.SourceLog(s.path, *loc))
+		s.errorWithSource(SyntaxError, 0, *loc, "Variable '", name, "' used before being initialized.")
 	}
 	if ptr < 0 || ptr >= len(scope.memory) {
 		if lib.DEBUG_MODE {
-			s.error(BuildError, "Invalid memory access: index out of bounds for variable '", name, "'.", lib.EOL, lib.SourceLog(s.path, *loc))
+			s.errorWithSource(BuildError, 0, *loc, "Invalid memory access: index out of bounds for variable '", name, "'.")
 		}
 		return undefined
 	}
@@ -112,7 +114,7 @@ func (s *Scope) resolve(name string, oscope *Scope, loc *parser.Loc) *Scope {
 		return s
 	}
 	if s.parent == nil {
-		oscope.error(ReferenceError, "Could not resolve name \x1b[32m", name, "\x1b[0m, it does not exist.", lib.EOL, lib.SourceLog(oscope.path, *loc))
+		oscope.errorWithSource(ReferenceError, 0, *loc, "Could not resolve name \x1b[32m", name, "\x1b[0m, it does not exist.")
 	}
 	return s.parent.resolve(name, oscope, loc)
 }
@@ -176,7 +178,7 @@ const (
 
 // path can be negative to use the s's path.
 func (s *Scope) errorWithSource(name ErrorName, path int, loc parser.Loc, args ...string) {
-	if path < 0 {
+	if path == 0 {
 		path = s.path
 	}
 	args = append(args, lib.EOL, lib.SourceLog(path, loc))
@@ -214,12 +216,13 @@ func (s *Scope) error(name ErrorName, msg ...string) {
 }
 
 func (s *Scope) throw(builder *strings.Builder) {
-	s.invalidate()
-	if s.parent == nil {
+	if s.of == ModuleScope || s.parent == nil {
 		lib.Stdout.WriteString(builder.String())
 		s.worker.crash()
+	} else {
+		s.invalidate()
+		s.parent.throw(builder)
 	}
-	s.parent.throw(builder)
 }
 
 func (s *Scope) invalidate() {

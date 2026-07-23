@@ -13,31 +13,23 @@ import "aspire/are/main/lib"
 
 type Loc = lib.Loc
 
-type root struct {
-	Imports []string
+type Parser struct {
+	Imports map[string]int
 	Program *Program
 }
 
-type Parser struct {
+var GlobalParser = NewParser()
+
+type ModuleParser struct {
 	path       int
+	Path       string
 	lexer      *Lexer
 	tokens     []Token
 	tokenIndex uint64
-	OwnModule  *Module
 	builtin    bool
+	OwnModule  *Module
 	Invalid    bool
-
-	*root
-}
-
-func newRoot() *root {
-	return &root{
-		Program: &Program{
-			Main:    Module{},
-			Modules: []*Module{},
-		},
-		Imports: []string{},
-	}
+	lib.WaitGroup
 }
 
 func init() {
@@ -80,6 +72,7 @@ func init() {
 	defNud(_gt, parse_globalthis)
 	defNud(_super, parse_super_expr)
 	defNud(_await, parse_await_expr)
+	defNud(_fn, parseFunExpr)
 
 	defNud(O_BRACE, parse_object_lit)
 	defNud(O_BRACKET, parse_array_lit)
@@ -146,17 +139,21 @@ func init() {
 	defLed(NULLISH, parse_nullish_expr, NULLISH_COALLESCE_BP)
 }
 
-func NewBuiltinsParser(name string) *Parser {
-	return newBuiltinsParser(name, newRoot())
+func NewParser() *Parser {
+	return &Parser{
+		Imports: map[string]int{},
+		Program: &Program{
+			Main:    &Module{},
+			Modules: map[int]*Module{},
+		},
+	}
 }
 
-func newBuiltinsParser(name string, root *root) *Parser {
+func NewBuiltinsParser(name string) *ModuleParser {
 	path := "stdlib/" + name
 	var bytes []byte
 	var key int
 	if lib.DEBUG_MODE {
-		// const PATH = "C:\\Users\\ecmak\\ArachnoScript\\ARE\\v0.2.5\\app_src\\lib\\stdlib\\"
-		// b, k, err := lib.ReadFile(PATH + name)
 		b, k, err := lib.ReadFile(
 			lib.JoinPaths(lib.DirOf(lib.ExecPath()), "..", "app_src", "lib", "stdlib", name),
 		)
@@ -174,6 +171,7 @@ func newBuiltinsParser(name string, root *root) *Parser {
 		bytes = b
 		key = lib.WriteCacheFile(bytes, path)
 	}
+	// GlobalParser.Imports = append(GlobalParser.Imports, path)
 	if !lib.DEBUG_MODE {
 		path = lib.AnonymousPath
 	}
@@ -183,72 +181,71 @@ func newBuiltinsParser(name string, root *root) *Parser {
 		Path: key,
 		Body: []Node{},
 	}
-	root.Program.Modules = append(root.Program.Modules, module)
-	return &Parser{
+	GlobalParser.Program.Modules[key] = module
+	return &ModuleParser{
 		path:       key,
 		lexer:      lexer,
 		tokens:     tokens,
 		tokenIndex: 0,
 		OwnModule:  module,
-		root:       root,
 		builtin:    true,
 		Invalid:    false,
+		Path:       path,
 	}
 }
-
-var AnonymousCount = 0
 
 // path: represents the path to the module to parse.
 // if the path does not exist, the parser will attempt to parse 'path'.
 // handle this if it is unwanted behavior.
-func NewParser(path string, isRepl bool) *Parser {
-	return newParser(path, isRepl, newRoot())
-}
-
-func newParser(path string, isRepl bool, root *root) *Parser {
+func NewModuleParser(path string, isMain, isRepl bool) (mp *ModuleParser) {
 	defer func() { recover() }()
-	abs := path
-	if !lib.IsAbs(path) {
-		abs = lib.Abs(path)
-	}
 	var pk int
 	var buffer []byte
-	if lib.PathExists(abs) {
+	if isRepl {
+		buffer = []byte(path)
+		pk = lib.WriteAnonymousFile(buffer, 0)
+		path = lib.AnonymousPath
+	} else {
+		abs := path
+		if !lib.IsAbs(path) {
+			abs = lib.Abs(path)
+		}
 		b, k, err := lib.ReadFile(abs)
 		if err != nil {
-			(&Parser{}).parseError(PathError, err.Error())
+			(&ModuleParser{}).parseError(PathError, err.Error())
 		}
 		buffer = b
 		pk = k
-	} else {
-		AnonymousCount--
-		pk = AnonymousCount
-		buffer = []byte(path)
-		lib.WriteAnonymousFile(buffer, pk)
 	}
 	lexer := NewLexer(buffer, pk)
 	tokens := lexer.Tokenize()
-	p := &Parser{
+	mp = &ModuleParser{
 		path:       pk,
 		lexer:      lexer,
 		tokens:     tokens,
 		tokenIndex: 0,
-		root:       root,
-		OwnModule:  &Module{},
-		builtin:    false,
-		Invalid:    false,
+		OwnModule: &Module{
+			Path: pk,
+			Body: []Node{},
+		},
+		builtin: false,
+		Invalid: false,
+		Path:    path,
 	}
-	if isRepl {
-		root.Program.Modules = append(root.Program.Modules, p.OwnModule)
+	GlobalParser.Imports[path] = pk
+	if isMain {
+		GlobalParser.Program.Main = mp.OwnModule
 	} else {
-		p.OwnModule = &root.Program.Main
-		p.OwnModule.Path = pk
+		GlobalParser.Program.Modules[pk] = mp.OwnModule
 	}
-	return p
+	return
 }
 
-func (p *Parser) Parse() {
-	defer func() { p.Invalid = recover() != nil }()
+func (p *ModuleParser) Parse() {
+	if p == nil {
+		return
+	}
+	defer func() { p.Invalid = recover() != nil; p.Wait() }()
 	for p.not_eof() {
 		if p.eatSemiColons() {
 			continue
@@ -257,14 +254,14 @@ func (p *Parser) Parse() {
 	}
 }
 
-func (p *Parser) expect(t TokenTag) Token {
+func (p *ModuleParser) expect(t TokenTag) Token {
 	if p.notAt(t) {
 		p.parseError(SyntaxError, lib.Sprintf("%s\x1b[36m'%s'\x1b[0m.", "Expected a token of type ", t.Lexeme()))
 	}
 	return p.eat()
 }
 
-func (p *Parser) eatSemiColons() bool {
+func (p *ModuleParser) eatSemiColons() bool {
 	if p.isAt(SEMICOLON) {
 		for p.isAt(SEMICOLON) {
 			p.next()
@@ -274,7 +271,7 @@ func (p *Parser) eatSemiColons() bool {
 	return false
 }
 
-func (p *Parser) eatSemiColon() bool {
+func (p *ModuleParser) eatSemiColon() bool {
 	if p.isAt(SEMICOLON) {
 		p.next()
 		return true
@@ -282,7 +279,7 @@ func (p *Parser) eatSemiColon() bool {
 	return false
 }
 
-func (p *Parser) eatComma() bool {
+func (p *ModuleParser) eatComma() bool {
 	if p.isAt(COMMA) {
 		p.eat()
 		return true
@@ -295,7 +292,7 @@ func (p *Parser) eatComma() bool {
 // @################# Statements #################@
 // @##############################################@
 // @##############################################@
-func (p *Parser) parseStmt() Node {
+func (p *ModuleParser) parseStmt() Node {
 	if handler, ok := stmtLU[p.atType(0)]; ok {
 		defer p.eatSemiColons()
 		return handler(p)
@@ -303,7 +300,7 @@ func (p *Parser) parseStmt() Node {
 	return p.parseExprStmt()
 }
 
-func parseFunDecl(p *Parser) Node {
+func parseFunDecl(p *ModuleParser) Node {
 	var isAsync = false
 	if p.isAt(_async) {
 		p.next()
@@ -316,7 +313,7 @@ func parseFunDecl(p *Parser) Node {
 
 const AnonymousName = "(anonymous)"
 
-func parseFunExpr(p *Parser) Node {
+func parseFunExpr(p *ModuleParser) Node {
 	isAsync := false
 	start := p.currLoc()
 	if p.isAt(_async) {
@@ -328,7 +325,7 @@ func parseFunExpr(p *Parser) Node {
 	return parseFnFromParams(p, StringNode(AnonymousName, lib.DumbyLoc), isAsync, true, start)
 }
 
-func parseFunMethod(p *Parser) Node {
+func parseFunMethod(p *ModuleParser) Node {
 	isAsync := false
 	idx := p.tokenIndex
 	if p.isAt(_async) {
@@ -355,7 +352,7 @@ func parseFunMethod(p *Parser) Node {
 	return parseMethod(p, isAsync)
 }
 
-func parseMethod(p *Parser, isAsync bool) Node {
+func parseMethod(p *ModuleParser, isAsync bool) Node {
 	var NameNode Node
 	switch p.atType(0) {
 	case O_BRACKET:
@@ -371,7 +368,7 @@ func parseMethod(p *Parser, isAsync bool) Node {
 	return parseFnFromParams(p, NameNode, isAsync, false, NameNode.Loc)
 }
 
-func parseFnFromParams(p *Parser, NameNode Node, isAsync, isAnony bool, start Loc) Node {
+func parseFnFromParams(p *ModuleParser, NameNode Node, isAsync, isAnony bool, start Loc) Node {
 	params := p.parse_params()
 	body := p.parseBlock()
 	return Node{
@@ -388,7 +385,7 @@ func parseFnFromParams(p *Parser, NameNode Node, isAsync, isAnony bool, start Lo
 	}
 }
 
-func parseReturnStmt(p *Parser) Node {
+func parseReturnStmt(p *ModuleParser) Node {
 	end := p.expect(_return).loc // return
 	var value Node
 	if !p.eatSemiColons() && p.notAt(C_BRACE) {
@@ -402,7 +399,7 @@ func parseReturnStmt(p *Parser) Node {
 	}
 }
 
-func parseThrowStmt(p *Parser) Node {
+func parseThrowStmt(p *ModuleParser) Node {
 	start := p.expect(_throw).loc // throw
 	value := p.parseExpr(DEFAULT_BP)
 	return Node{
@@ -413,7 +410,7 @@ func parseThrowStmt(p *Parser) Node {
 	}
 }
 
-func parseWhileStmt(p *Parser) Node {
+func parseWhileStmt(p *ModuleParser) Node {
 	start := p.expect(_while).loc // while
 	condition := p.parseCondition()
 	end := condition.Loc
@@ -433,7 +430,7 @@ func parseWhileStmt(p *Parser) Node {
 	}
 }
 
-func parseForStmt(p *Parser) Node {
+func parseForStmt(p *ModuleParser) Node {
 	start := p.expect(_for).loc // 'for'
 	p.expect(O_PAREN)
 	tag := T_TFORLOOP
@@ -502,7 +499,7 @@ func parseForStmt(p *Parser) Node {
 	}
 }
 
-func parseDoWhileStmt(p *Parser) Node {
+func parseDoWhileStmt(p *ModuleParser) Node {
 	start := p.expect(_do).loc // do
 	var body = p.parseBlockOrStmt()
 	p.expect(_while)
@@ -519,7 +516,7 @@ func parseDoWhileStmt(p *Parser) Node {
 	}
 }
 
-func parseVarDecl(p *Parser) Node {
+func parseVarDecl(p *ModuleParser) Node {
 	declType := handleDeclKeyword(p)
 	startLoc := p.expect(VARDECL).loc
 	lhs := p.parseVarDeclLhs()
@@ -548,7 +545,7 @@ func parseVarDecl(p *Parser) Node {
 	}
 }
 
-func handleDeclKeyword(p *Parser) DeclKind {
+func handleDeclKeyword(p *ModuleParser) DeclKind {
 	declType := MutableDecl
 	switch p.atType(0) {
 	case _const:
@@ -563,12 +560,12 @@ func handleDeclKeyword(p *Parser) DeclKind {
 	return declType
 }
 
-func parseVarDeclStmt(p *Parser) Node {
+func parseVarDeclStmt(p *ModuleParser) Node {
 	defer p.eatSemiColon()
 	return parseVarDecl(p)
 }
 
-func (p *Parser) parseDeclRhs(declType DeclKind, errMsg string) Node {
+func (p *ModuleParser) parseDeclRhs(declType DeclKind, errMsg string) Node {
 	var rhs Node
 	if declType == ConstantDecl && p.notAt(EQUALS) {
 		p.parseError(SyntaxError, errMsg)
@@ -579,7 +576,7 @@ func (p *Parser) parseDeclRhs(declType DeclKind, errMsg string) Node {
 	return rhs
 }
 
-func (p *Parser) parseVarDeclLhs() Node {
+func (p *ModuleParser) parseVarDeclLhs() Node {
 	switch p.atType(0) {
 	case IDENTIFIER:
 		return parse_ident(p)
@@ -593,7 +590,7 @@ func (p *Parser) parseVarDeclLhs() Node {
 	}
 }
 
-func (p *Parser) parse_array_destructuring() Node {
+func (p *ModuleParser) parse_array_destructuring() Node {
 	start := p.expect(O_BRACKET).loc
 	elements := []Node{}
 	for p.not_eof() && p.notAt(C_BRACKET) {
@@ -621,7 +618,7 @@ func (p *Parser) parse_array_destructuring() Node {
 	}
 }
 
-func (p *Parser) parse_object_destructuring() Node {
+func (p *ModuleParser) parse_object_destructuring() Node {
 	start := p.expect(O_BRACE).loc
 	props := map[NodeIndex]ObjectDestProp{}
 	keys := []Node{}
@@ -684,7 +681,7 @@ func (p *Parser) parse_object_destructuring() Node {
 	}
 }
 
-func parseIfStmt(p *Parser) Node {
+func parseIfStmt(p *ModuleParser) Node {
 	loc := p.expect(_if).loc
 	condition := p.parseCondition()
 	body := p.parseBlockOrStmt()
@@ -704,7 +701,7 @@ func parseIfStmt(p *Parser) Node {
 	}
 }
 
-func (p *Parser) parseCondition() Node {
+func (p *ModuleParser) parseCondition() Node {
 	p.expect(O_PAREN)
 	defer p.expect(C_PAREN)
 	if p.isAt(VARDECL) {
@@ -713,7 +710,7 @@ func (p *Parser) parseCondition() Node {
 	return p.parseExpr(DEFAULT_BP)
 }
 
-func parseBlockStmt(p *Parser) Node {
+func parseBlockStmt(p *ModuleParser) Node {
 	loc := p.currLoc()
 	return Node{
 		Tag:      T_BLOCK,
@@ -723,7 +720,7 @@ func parseBlockStmt(p *Parser) Node {
 	}
 }
 
-func (p *Parser) parseBlock() []Node {
+func (p *ModuleParser) parseBlock() []Node {
 	block := []Node{}
 	p.expect(O_BRACE)
 	for p.not_eof() && p.notAt(C_BRACE) {
@@ -733,14 +730,14 @@ func (p *Parser) parseBlock() []Node {
 	return block
 }
 
-func (p *Parser) parseBlockOrStmt() []Node {
+func (p *ModuleParser) parseBlockOrStmt() []Node {
 	if p.isAt(O_BRACE) {
 		return p.parseBlock()
 	}
 	return []Node{p.parseStmt()}
 }
 
-func parseLabel(p *Parser) Node {
+func parseLabel(p *ModuleParser) Node {
 	loc := p.currLoc()
 	// remove the preceding '@'
 	l := p.src(p.expect(LABEL))[1:] // label
@@ -752,7 +749,7 @@ func parseLabel(p *Parser) Node {
 	}
 }
 
-func parseSwitchStmt(p *Parser) Node {
+func parseSwitchStmt(p *ModuleParser) Node {
 	loc := p.expect(_switch).loc
 	condition := p.parseCondition()
 	p.expect(O_BRACE)
@@ -789,7 +786,7 @@ func parseSwitchStmt(p *Parser) Node {
 	}
 }
 
-func parse_yield_stmt(p *Parser) Node {
+func parse_yield_stmt(p *ModuleParser) Node {
 	loc := p.expect(_yield).loc
 	return Node{
 		Tag:      T_YIELDSTMT,
@@ -799,7 +796,7 @@ func parse_yield_stmt(p *Parser) Node {
 	}
 }
 
-func parse_import_stmt(p *Parser) Node {
+func parse_import_stmt(p *ModuleParser) Node {
 	loc := p.expect(_import).loc
 	imp_path := "invalid-path.as"
 	ns := ""
@@ -835,7 +832,7 @@ func parse_import_stmt(p *Parser) Node {
 	}
 }
 
-func parse_export_stmt(p *Parser) Node {
+func parse_export_stmt(p *ModuleParser) Node {
 	loc := p.expect(_export).loc
 	var export Node
 	if p.isAt(DECL) {
@@ -853,13 +850,13 @@ func parse_export_stmt(p *Parser) Node {
 	}
 }
 
-func parse_class_stmt(p *Parser) Node {
+func parse_class_stmt(p *ModuleParser) Node {
 	loc := p.expect(_class).loc
 	name := string(parse_ident(p).Data.(Identifier))
 	return parse_class_decl(p, name, false, loc)
 }
 
-func parse_class_decl(p *Parser, name string, isAnony bool, loc lib.Loc) Node {
+func parse_class_decl(p *ModuleParser, name string, isAnony bool, loc lib.Loc) Node {
 	methods := []Node{}
 	props := []Node{}
 	var defaultProp, constructor, extends Node
@@ -932,7 +929,7 @@ func parse_class_decl(p *Parser, name string, isAnony bool, loc lib.Loc) Node {
 	}
 }
 
-func (p *Parser) parse_class_prop() Node {
+func (p *ModuleParser) parse_class_prop() Node {
 	var lhs, rhs Node
 	start := p.currLoc()
 	switch p.atType(0) {
@@ -960,7 +957,7 @@ func (p *Parser) parse_class_prop() Node {
 	}
 }
 
-func (p *Parser) parse_modifiers() (modifiers []TokenTag) {
+func (p *ModuleParser) parse_modifiers() (modifiers []TokenTag) {
 	if p.isAt(_private) || p.isAt(_public) {
 		modifiers = append(modifiers, p.eat().tag)
 	}
@@ -973,7 +970,7 @@ func (p *Parser) parse_modifiers() (modifiers []TokenTag) {
 	return
 }
 
-func parse_try_catch_finally(p *Parser) Node {
+func parse_try_catch_finally(p *ModuleParser) Node {
 	loc := p.expect(_try).loc
 	try := p.parseBlock()
 	var catch, finally []Node
@@ -1004,7 +1001,7 @@ func parse_try_catch_finally(p *Parser) Node {
 	}
 }
 
-func parse_fallthrough(p *Parser) Node {
+func parse_fallthrough(p *ModuleParser) Node {
 	return Node{
 		Tag:      T_FALLTHROUGH,
 		Children: nil,
@@ -1013,7 +1010,7 @@ func parse_fallthrough(p *Parser) Node {
 	}
 }
 
-func parse_break_stmt(p *Parser) Node {
+func parse_break_stmt(p *ModuleParser) Node {
 	return Node{
 		Tag:      T_BREAKSTMT,
 		Children: nil,
@@ -1022,7 +1019,7 @@ func parse_break_stmt(p *Parser) Node {
 	}
 }
 
-func parse_continue_stmt(p *Parser) Node {
+func parse_continue_stmt(p *ModuleParser) Node {
 	return Node{
 		Tag:      T_CONTINUESTMT,
 		Children: nil,
@@ -1037,12 +1034,12 @@ func parse_continue_stmt(p *Parser) Node {
 // @#############################################@
 // @#############################################@
 
-func (p *Parser) parseExprStmt() Node {
+func (p *ModuleParser) parseExprStmt() Node {
 	defer p.eatSemiColon()
 	return p.parseExpr(DEFAULT_BP)
 }
 
-func (p *Parser) parseExpr(bp BindingPower) Node {
+func (p *ModuleParser) parseExpr(bp BindingPower) Node {
 	// find a nud handler for the current token
 	nud, ok := nudLU[p.atType(0)]
 	if !ok {
@@ -1060,7 +1057,7 @@ func (p *Parser) parseExpr(bp BindingPower) Node {
 	return left
 }
 
-func (p *Parser) parse_exprs(valid_tags ...NodeTag) Node {
+func (p *ModuleParser) parse_exprs(valid_tags ...NodeTag) Node {
 	tokenIndex := p.tokenIndex
 	expr := p.parseExpr(DEFAULT_BP)
 	if lib.InSlice(valid_tags, expr.Tag) {
@@ -1071,7 +1068,7 @@ func (p *Parser) parse_exprs(valid_tags ...NodeTag) Node {
 	return Node{}
 }
 
-func (p *Parser) parse_param() Node {
+func (p *ModuleParser) parse_param() Node {
 	switch p.atType(0) {
 	case DOT3:
 		start := p.eat().loc
@@ -1094,7 +1091,7 @@ func (p *Parser) parse_param() Node {
 	}
 }
 
-func (p *Parser) parse_params() []Node {
+func (p *ModuleParser) parse_params() []Node {
 	p.expect(O_PAREN)
 	args := []Node{}
 	for p.not_eof() && p.notAt(C_PAREN) {
@@ -1108,7 +1105,7 @@ func (p *Parser) parse_params() []Node {
 }
 
 // parse_args, parse_grouping_expr
-func (p *Parser) parse_expr_list() []Node {
+func (p *ModuleParser) parse_expr_list() []Node {
 	p.expect(O_PAREN)
 	exprs := []Node{}
 	for p.not_eof() && p.notAt(C_PAREN) {
@@ -1121,7 +1118,7 @@ func (p *Parser) parse_expr_list() []Node {
 	return exprs
 }
 
-func parse_globalthis(p *Parser) Node {
+func parse_globalthis(p *ModuleParser) Node {
 	loc := p.expect(_gt).loc
 	return Node{
 		Tag:      T_GT,
@@ -1131,7 +1128,7 @@ func parse_globalthis(p *Parser) Node {
 	}
 }
 
-func parse_await_expr(p *Parser) Node {
+func parse_await_expr(p *ModuleParser) Node {
 	start := p.expect(_await).loc
 	operand := p.parseExpr(ASSIGNMENT_BP)
 	return Node{
@@ -1142,7 +1139,7 @@ func parse_await_expr(p *Parser) Node {
 	}
 }
 
-func parse_super_expr(p *Parser) Node {
+func parse_super_expr(p *ModuleParser) Node {
 	start := p.expect(_super).loc
 	params := p.parse_expr_list()
 	return Node{
@@ -1153,12 +1150,12 @@ func parse_super_expr(p *Parser) Node {
 	}
 }
 
-func parse_class_expr(p *Parser) Node {
+func parse_class_expr(p *ModuleParser) Node {
 	loc := p.expect(_class).loc
 	return parse_class_decl(p, "", true, loc)
 }
 
-func parse_nullish_expr(p *Parser, operand Node, bp BindingPower) Node {
+func parse_nullish_expr(p *ModuleParser, operand Node, bp BindingPower) Node {
 	p.next() // ??
 	right := p.parseExpr(bp)
 	return Node{
@@ -1172,7 +1169,7 @@ func parse_nullish_expr(p *Parser, operand Node, bp BindingPower) Node {
 	}
 }
 
-func parse_instanceof_expr(p *Parser, operand Node, bp BindingPower) Node {
+func parse_instanceof_expr(p *ModuleParser, operand Node, bp BindingPower) Node {
 	p.next()
 	right := p.parseExpr(bp)
 	return Node{
@@ -1187,7 +1184,7 @@ func parse_instanceof_expr(p *Parser, operand Node, bp BindingPower) Node {
 	}
 }
 
-func parse_bitwise_expr(p *Parser, operand Node, bp BindingPower) Node {
+func parse_bitwise_expr(p *ModuleParser, operand Node, bp BindingPower) Node {
 	var nodeTag NodeTag
 	tkTag := p.eat().tag
 	switch tkTag {
@@ -1226,7 +1223,7 @@ func parse_bitwise_expr(p *Parser, operand Node, bp BindingPower) Node {
 	}
 }
 
-func parse_unary_expr(p *Parser) Node {
+func parse_unary_expr(p *ModuleParser) Node {
 	op := p.eat() // + | -
 	operand := p.parseExpr(UNARY_BP)
 	return Node{
@@ -1240,11 +1237,11 @@ func parse_unary_expr(p *Parser) Node {
 	}
 }
 
-func parse_bitnot_expr(p *Parser) Node {
+func parse_bitnot_expr(p *ModuleParser) Node {
 	return parse_operand_expr(p, BITNOT, UNARY_BP, T_BITNOT)
 }
 
-func parse_plus2_prefix(p *Parser) Node {
+func parse_plus2_prefix(p *ModuleParser) Node {
 	start := p.eat().loc // ++
 	operand := p.parseExpr(UNARY_BP)
 	return Node{
@@ -1259,7 +1256,7 @@ func parse_plus2_prefix(p *Parser) Node {
 	}
 }
 
-func parse_minus2_prefix(p *Parser) Node {
+func parse_minus2_prefix(p *ModuleParser) Node {
 	start := p.eat().loc // --
 	operand := p.parseExpr(UNARY_BP)
 	return Node{
@@ -1274,7 +1271,7 @@ func parse_minus2_prefix(p *Parser) Node {
 	}
 }
 
-func parse_plus2_postfix(p *Parser, operand Node, bp BindingPower) Node {
+func parse_plus2_postfix(p *ModuleParser, operand Node, bp BindingPower) Node {
 	end := p.eat().loc // ++
 	return Node{
 		Tag:      T_INCREEXPR,
@@ -1288,7 +1285,7 @@ func parse_plus2_postfix(p *Parser, operand Node, bp BindingPower) Node {
 	}
 }
 
-func parse_minus2_postfix(p *Parser, operand Node, bp BindingPower) Node {
+func parse_minus2_postfix(p *ModuleParser, operand Node, bp BindingPower) Node {
 	end := p.eat().loc // --
 	return Node{
 		Tag:      T_INCREEXPR,
@@ -1302,7 +1299,7 @@ func parse_minus2_postfix(p *Parser, operand Node, bp BindingPower) Node {
 	}
 }
 
-func parse_object_lit(p *Parser) Node {
+func parse_object_lit(p *ModuleParser) Node {
 	props := map[NodeIndex]ObjectProp{}
 	keys := []Node{}
 	start := p.expect(O_BRACE).loc
@@ -1387,7 +1384,7 @@ func parse_object_lit(p *Parser) Node {
 	}
 }
 
-func parse_array_lit(p *Parser) Node {
+func parse_array_lit(p *ModuleParser) Node {
 	elements := []Node{}
 	start := p.expect(O_BRACKET).loc
 	for p.not_eof() && p.notAt(C_BRACKET) {
@@ -1416,7 +1413,7 @@ func parse_array_lit(p *Parser) Node {
 	}
 }
 
-func parse_ternary_expr(p *Parser, condition Node, bp BindingPower) Node {
+func parse_ternary_expr(p *ModuleParser, condition Node, bp BindingPower) Node {
 	p.next() // ?
 	Then := p.parseExpr(LOGICAL_OR_BP)
 	p.expect(COLON)
@@ -1429,7 +1426,7 @@ func parse_ternary_expr(p *Parser, condition Node, bp BindingPower) Node {
 	}
 }
 
-func parse_match_expr(p *Parser) Node {
+func parse_match_expr(p *ModuleParser) Node {
 	loc := p.expect(_match).loc
 	operand := p.parseCondition()
 	matches := []Node{}
@@ -1468,7 +1465,7 @@ func parse_match_expr(p *Parser) Node {
 	}
 }
 
-func parse_from_expr(p *Parser) Node {
+func parse_from_expr(p *ModuleParser) Node {
 	loc := p.expect(_from).loc
 	path := parse_string(p).Data.(string)
 	return Node{
@@ -1479,45 +1476,54 @@ func parse_from_expr(p *Parser) Node {
 	}
 }
 
-func (p *Parser) parseScriptConcurrent(path string) (resolvedPath string) {
+func (p *ModuleParser) parseScriptConcurrent(path string) (resolvedPath string) {
 	if p.builtin {
-		resolvedPath = lib.JoinPaths(lib.DirOf(lib.PathFromKey(p.path)), path)
-		lib.Go(func() {
-			newp := newBuiltinsParser(path, p.root)
-			newp.Parse()
-			p.root.Program.Modules = append(p.root.Program.Modules, newp.OwnModule)
-		})
+		resolvedPath = lib.ToLowerCase(lib.JoinPaths(
+			// Directory of current library module.
+			lib.DirOf(lib.PathFromKey(p.path)),
+			// Other module to parse.
+			path))
+		// Only parse if module has not been parsed before.
+		if len(GlobalParser.Imports) == 0 || !lib.MapHas(GlobalParser.Imports, resolvedPath) {
+			p.Go(func() {
+				newp := NewBuiltinsParser(path)
+				newp.Parse()
+				GlobalParser.Imports[resolvedPath] = newp.path
+				GlobalParser.Program.Modules[newp.path] = newp.OwnModule
+			})
+		}
 	} else {
 		if lib.IsAbs(path) {
-			resolvedPath = path
+			resolvedPath = lib.ToLowerCase(path)
 		} else {
-			resolvedPath = lib.JoinPaths(lib.DirOf(lib.PathFromKey(p.path)), path)
+			resolvedPath = lib.ToLowerCase(lib.JoinPaths(lib.DirOf(lib.PathFromKey(p.path)), path))
 		}
-		if !lib.InSlice(p.root.Imports, resolvedPath) {
-			lib.Go(func() {
-				newp := newParser(resolvedPath, false, p.root)
+		// Only parse if module has not been parsed before.
+		if len(GlobalParser.Imports) == 0 || !lib.MapHas(GlobalParser.Imports, resolvedPath) {
+			p.Go(func() {
+				newp := NewModuleParser(resolvedPath, false, false)
 				newp.Parse()
-				p.root.Program.Modules = append(p.root.Program.Modules, newp.OwnModule)
-				p.root.Imports = append(p.root.Imports, resolvedPath)
+				GlobalParser.Imports[resolvedPath] = newp.path
+				GlobalParser.Program.Modules[newp.path] = newp.OwnModule
 			})
 		}
 	}
 	return
 }
 
-func parse_void_expr(p *Parser) Node {
+func parse_void_expr(p *ModuleParser) Node {
 	return parse_operand_expr(p, _void, UNARY_BP, T_VOID)
 }
 
-func parse_typeof_expr(p *Parser) Node {
+func parse_typeof_expr(p *ModuleParser) Node {
 	return parse_operand_expr(p, _typeof, UNARY_BP, T_TYPEOFEXPR)
 }
 
-func parse_new_expr(p *Parser) Node {
+func parse_new_expr(p *ModuleParser) Node {
 	return parse_operand_expr(p, _new, CALL_BP, T_NEWEXPR)
 }
 
-func parse_async_fn_expr(p *Parser) Node {
+func parse_async_fn_expr(p *ModuleParser) Node {
 	if p.atType(1) == _fn {
 		return parseFunExpr(p)
 	}
@@ -1549,7 +1555,7 @@ func parse_async_fn_expr(p *Parser) Node {
 	}
 }
 
-func parse_operand_expr(p *Parser, tktag TokenTag, bp BindingPower, nodeTag NodeTag) Node {
+func parse_operand_expr(p *ModuleParser, tktag TokenTag, bp BindingPower, nodeTag NodeTag) Node {
 	start := p.expect(tktag).loc
 	operand := p.parseExpr(bp)
 	return Node{
@@ -1560,7 +1566,7 @@ func parse_operand_expr(p *Parser, tktag TokenTag, bp BindingPower, nodeTag Node
 	}
 }
 
-func parse_member_expr(p *Parser, object Node, bp BindingPower) Node {
+func parse_member_expr(p *ModuleParser, object Node, bp BindingPower) Node {
 	start := object.Loc
 	computed := false
 	member := Node{}
@@ -1585,7 +1591,7 @@ func parse_member_expr(p *Parser, object Node, bp BindingPower) Node {
 	}
 }
 
-func parse_call_expr(p *Parser, caller Node, bp BindingPower) Node {
+func parse_call_expr(p *ModuleParser, caller Node, bp BindingPower) Node {
 	loc := caller.Loc
 	arguments := p.parse_expr_list()
 	return Node{
@@ -1596,15 +1602,15 @@ func parse_call_expr(p *Parser, caller Node, bp BindingPower) Node {
 	}
 }
 
-func parse_comparison_expr(p *Parser, left Node, bp BindingPower) Node {
+func parse_comparison_expr(p *ModuleParser, left Node, bp BindingPower) Node {
 	return parseLRExpr(p, bp, left, T_COMPARE)
 }
 
-func parse_logical_expr(p *Parser, left Node, bp BindingPower) Node {
+func parse_logical_expr(p *ModuleParser, left Node, bp BindingPower) Node {
 	return parseLRExpr(p, bp, left, T_LOGICAL)
 }
 
-func parse_not_expr(p *Parser) Node {
+func parse_not_expr(p *ModuleParser) Node {
 	start := p.eat().loc
 	operand := p.parseExpr(DEFAULT_BP)
 	return Node{
@@ -1615,11 +1621,11 @@ func parse_not_expr(p *Parser) Node {
 	}
 }
 
-func parse_assignment_expr(p *Parser, left Node, bp BindingPower) Node {
+func parse_assignment_expr(p *ModuleParser, left Node, bp BindingPower) Node {
 	return parseLRExpr(p, bp, left, T_ASSIGN)
 }
 
-func parseLRExpr(p *Parser, bp BindingPower, left Node, tag NodeTag) Node {
+func parseLRExpr(p *ModuleParser, bp BindingPower, left Node, tag NodeTag) Node {
 	op := p.eat().tag
 	right := p.parseExpr(bp)
 	return Node{
@@ -1632,11 +1638,11 @@ func parseLRExpr(p *Parser, bp BindingPower, left Node, tag NodeTag) Node {
 	}
 }
 
-func parse_binary_expr(p *Parser, left Node, bp BindingPower) Node {
+func parse_binary_expr(p *ModuleParser, left Node, bp BindingPower) Node {
 	return parseLRExpr(p, bp, left, T_BINARY_EXP)
 }
 
-func parse_open_paren(p *Parser) Node {
+func parse_open_paren(p *ModuleParser) Node {
 	start := p.eat().loc
 	can_parse_fn := true
 	if p.isAt(C_PAREN) {
@@ -1726,7 +1732,7 @@ func parse_open_paren(p *Parser) Node {
 	}
 }
 
-func (p *Parser) parseCompareList(list []Node) Node {
+func (p *ModuleParser) parseCompareList(list []Node) Node {
 	for p.isAt(BITOR) && p.not_eof() {
 		p.next()
 		list = append(list, p.parseExpr(BITOR_BP))
@@ -1740,7 +1746,7 @@ func (p *Parser) parseCompareList(list []Node) Node {
 	}
 }
 
-func parse_string(p *Parser) Node {
+func parse_string(p *ModuleParser) Node {
 	loc := p.currLoc()
 	tk := p.expect(STRING)
 	s := p.src(tk)
@@ -1759,7 +1765,7 @@ func StringNode(str string, loc Loc) Node {
 	}
 }
 
-func parse_number(p *Parser) Node {
+func parse_number(p *ModuleParser) Node {
 	loc := p.currLoc()
 	tk := p.expect(NUMBER)
 	return Node{
@@ -1777,7 +1783,7 @@ func NumberNode(num float64, loc Loc) Node {
 	}
 }
 
-func parse_ident(p *Parser) Node {
+func parse_ident(p *ModuleParser) Node {
 	loc := p.currLoc()
 	tk := p.expect(IDENTIFIER)
 	return Node{
@@ -1787,7 +1793,7 @@ func parse_ident(p *Parser) Node {
 	}
 }
 
-func (p *Parser) parseError(errname ErrorName, additionals ...string) {
+func (p *ModuleParser) parseError(errname ErrorName, additionals ...string) {
 	name := "SyntaxError"
 	message := ""
 	// Use a string builder for efficient string concatenation and to
@@ -1824,11 +1830,11 @@ func (p *Parser) parseError(errname ErrorName, additionals ...string) {
 	panic("Parse Error...")
 }
 
-func (p *Parser) not_eof() bool {
+func (p *ModuleParser) not_eof() bool {
 	return p.atType(0) != EOF
 }
 
-func (p *Parser) loc(startLoc, end Loc) Loc {
+func (p *ModuleParser) loc(startLoc, end Loc) Loc {
 	return Loc{
 		Line:  startLoc.Line,
 		Col:   startLoc.Col,
@@ -1837,19 +1843,19 @@ func (p *Parser) loc(startLoc, end Loc) Loc {
 	}
 }
 
-func (p *Parser) currLoc() Loc {
+func (p *ModuleParser) currLoc() Loc {
 	return p.at(0).loc
 }
 
-func (p *Parser) src(tk Token) string {
+func (p *ModuleParser) src(tk Token) string {
 	return p.lexer.src(tk)
 }
 
-func (p *Parser) locSrc(loc Loc) string {
+func (p *ModuleParser) locSrc(loc Loc) string {
 	return p.lexer.src(token(0, loc))
 }
 
-func (p *Parser) at(idx int) Token {
+func (p *ModuleParser) at(idx int) Token {
 	l := len(p.tokens)
 	idx = int(p.tokenIndex) + idx
 	if idx >= l || idx < 0 {
@@ -1858,20 +1864,20 @@ func (p *Parser) at(idx int) Token {
 	return p.tokens[idx]
 }
 
-func (p *Parser) atType(idx int) TokenTag {
+func (p *ModuleParser) atType(idx int) TokenTag {
 	return p.at(idx).tag
 }
 
-func (p *Parser) next() {
+func (p *ModuleParser) next() {
 	p.tokenIndex++
 }
 
-func (p *Parser) eat() Token {
+func (p *ModuleParser) eat() Token {
 	defer p.next()
 	return p.at(0)
 }
 
-func (p *Parser) isAt(t TokenTag) bool {
+func (p *ModuleParser) isAt(t TokenTag) bool {
 	currT := p.atType(0)
 	switch t {
 	case DECL:
@@ -1888,7 +1894,7 @@ func (p *Parser) isAt(t TokenTag) bool {
 	return currT == t
 }
 
-func (p *Parser) notAt(t TokenTag) bool {
+func (p *ModuleParser) notAt(t TokenTag) bool {
 	return !p.isAt(t)
 }
 
@@ -1901,9 +1907,15 @@ func (p *Parser) PrintNodes(count uint) {
 	for _, n := range p.Program.Main.Body {
 		p.debug(n)
 	}
-	for i := uint(0); i < count && i < uint(len(p.Program.Modules)); i++ {
-		for _, n := range p.Program.Modules[i].Body {
-			p.debug(n)
+	i := uint(0)
+	for _, m := range p.Program.Modules {
+		if i < count && i < uint(len(p.Program.Modules)) {
+			i++
+			for _, n := range m.Body {
+				p.debug(n)
+			}
+		} else {
+			break
 		}
 	}
 }
