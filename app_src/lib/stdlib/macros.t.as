@@ -73,13 +73,18 @@ declare function random(n: number): number;
  */
 declare function to_string(v: any): string;
 /**
- * Converts the given value to a string.
+ * Converts / coerces the given value to a string.
  * Useful for converting byte arrays (slices) to string values.
  *
  * @param v - The value to convert.
  * @returns The converted string.
  */
 declare function string_cast(v: any): string;
+/**
+ * Converts / coerces the given value to a number.
+ * Useful for converting bytes to AS numbers.
+ */
+declare function number_cast(v: any): number;
 
 /*
  * *****************
@@ -218,5 +223,39 @@ declare function wasm_get_export(
 ): macro;
 
 declare function wat_to_wasm(bytes: raw<byte[]>): raw<byte[]>;
-
+/**
+ * Switches to interactive REPL mode and returns after REPL is closed.
+ */
 declare function repl(): void;
+/**
+ * Parses a number from the given string using the provided base / radix (0, 2 to 36).
+ * The string may begin with a leading sign: "+" or "-".
+ * If the base argument is 0, the true base is implied by the string's prefix following the sign (if present): 2 for "0b", 8 for "0" or "0o", 16 for "0x", and 10 otherwise.
+ * Also, for argument base 0 only, an underscore character is permitted to separate successive digits.
+ * `10` is a valid decimal number, `0b1010` is a valid binary number, `0o12` is a valid octal number, and `0xA` is a valid hexadecimal number.
+ * `10_000`, `0b1010_0000`, `0o12_34`, and `0xA_B_C` are all valid numbers with underscores.
+ * The function returns the parsed number as a 64-bit floating-point value.
+ * If the string cannot be parsed as a valid number, it returns NaN.
+ * @param str
+ * @param radix
+ */
+declare function parse_int(str: string, radix: number): number;
+declare function parse_float(str: string): number;
+
+/**
+ * Reports whether `n` is a finite number.
+ * @param n
+ */
+declare function is_finite(n: number): boolean;
+/**
+ * Returns the integral part of the numeric expression x, removing any fractional digits.
+ * If x is already an integer, the result is x.
+ * @param n
+ */
+declare function trunc_num(n: number): number;
+
+/**
+ * Returns a stack trace with `n` number frames.
+ * @param n Number of frames to collect.
+ */
+declare function stack_trace(n: number): string;

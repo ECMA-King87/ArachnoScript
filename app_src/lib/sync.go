@@ -16,3 +16,10 @@ func Go(f func()) {
 func Goexit() {
 	runtime.Goexit()
 }
+
+type Task = func()
+
+type WorkerPool struct {
+	// WaitGroup
+	Pool chan Task
+}

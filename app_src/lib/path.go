@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 )
 
+func IsLocalPath(path string) bool { return filepath.IsLocal(path) }
+
+func LocalizePath(path string) (string, error) { return filepath.Localize(path) }
+
 func RealPath(path string) string {
 	return catch(filepath.Abs(path))
 }
@@ -23,6 +27,10 @@ func Abs(path string) string {
 
 func JoinPaths(paths ...string) string {
 	return filepath.Join(paths...)
+}
+
+func VolumeName(path string) string {
+	return filepath.VolumeName(path)
 }
 
 // const exec_path = "C:\\Users\\ecmak\\ArachnoScript\\ARE\\v0.2\\ESK 2\\main.exe"

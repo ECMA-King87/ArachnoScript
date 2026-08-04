@@ -28,8 +28,8 @@ const (
 type Scope struct {
 	memory []Value
 	// A negative ptr means it is uninitialized.
-	names             *lib.Map[string, int]
-	varTypes          *lib.Map[string, DeclType]
+	names             *lib.Map[*String, int]
+	varTypes          *lib.Map[*String, DeclType]
 	parent            *Scope
 	worker            *Worker
 	valid, in_promise bool
@@ -37,11 +37,11 @@ type Scope struct {
 
 	// the scope must carry a path
 	path       int
-	objectHash uint64
+	objectHash uintptr
 	// object Value
 }
 
-func NewScope(parent *Scope, object uint64, of lib.Enum, path int) *Scope {
+func NewScope(parent *Scope, object uintptr, of lib.Enum, path int) *Scope {
 	var worker *Worker
 	if parent != nil {
 		if path == 0 {
@@ -53,8 +53,8 @@ func NewScope(parent *Scope, object uint64, of lib.Enum, path int) *Scope {
 	}
 	return &Scope{
 		memory:     []Value{},
-		names:      lib.NewMap[string, int](),
-		varTypes:   lib.NewMap[string, DeclType](),
+		names:      lib.NewMap[*String, int](),
+		varTypes:   lib.NewMap[*String, DeclType](),
 		parent:     parent,
 		valid:      true,
 		in_promise: false,
@@ -69,9 +69,9 @@ func NewFunctionScope(function *Function, this *Object) *Scope {
 	return NewScope(function.declScope, hashValue(this), FunctionScope, 0)
 }
 
-func (s *Scope) declare(name string, varType DeclType, loc parser.Loc) int {
+func (s *Scope) declare(name *String, varType DeclType, loc parser.Loc) int {
 	if s.names.Has(name) {
-		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name))
+		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name.string))
 	}
 	ptr := len(s.memory)
 	s.memory = append(s.memory, undefined)
@@ -80,12 +80,12 @@ func (s *Scope) declare(name string, varType DeclType, loc parser.Loc) int {
 	return ptr
 }
 
-func (s *Scope) init(name string, value Value, varType DeclType, loc parser.Loc) Value {
+func (s *Scope) init(name *String, value Value, varType DeclType, loc parser.Loc) Value {
 	if s.path == 0 && s.of != GlobalScope {
-		s.error(BuildError, "Scope path is uninitialized: "+name)
+		s.error(BuildError, "Scope path is uninitialized: "+name.string)
 	}
 	if s.names.Has(name) {
-		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name))
+		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name.string))
 	}
 	ptr := len(s.memory)
 	s.names.Set(name, ptr)
@@ -94,32 +94,32 @@ func (s *Scope) init(name string, value Value, varType DeclType, loc parser.Loc)
 	return value
 }
 
-func (s *Scope) getValue(name string, loc *parser.Loc) Value {
+func (s *Scope) getValue(name *String, loc *parser.Loc) Value {
 	scope := s.resolve(name, s, loc)
 	ptr, _ := scope.names.Get(name)
 	if ptr == -1 {
-		s.errorWithSource(SyntaxError, 0, *loc, "Variable '", name, "' used before being initialized.")
+		s.errorWithSource(SyntaxError, 0, *loc, "Variable '", name.string, "' used before being initialized.")
 	}
 	if ptr < 0 || ptr >= len(scope.memory) {
 		if lib.DEBUG_MODE {
-			s.errorWithSource(BuildError, 0, *loc, "Invalid memory access: index out of bounds for variable '", name, "'.")
+			s.errorWithSource(BuildError, 0, *loc, "Invalid memory access: index out of bounds for variable '", name.string, "'.")
 		}
 		return undefined
 	}
 	return scope.memory[ptr]
 }
 
-func (s *Scope) resolve(name string, oscope *Scope, loc *parser.Loc) *Scope {
+func (s *Scope) resolve(name *String, oscope *Scope, loc *parser.Loc) *Scope {
 	if s.names.Has(name) {
 		return s
 	}
 	if s.parent == nil {
-		oscope.errorWithSource(ReferenceError, 0, *loc, "Could not resolve name \x1b[32m", name, "\x1b[0m, it does not exist.")
+		oscope.errorWithSource(ReferenceError, 0, *loc, "Could not resolve name \x1b[32m", name.string, "\x1b[0m, it does not exist.")
 	}
 	return s.parent.resolve(name, oscope, loc)
 }
 
-func (s *Scope) findScopeWith(u uint64) *Scope {
+func (s *Scope) findScopeWith(u uintptr) *Scope {
 	if s.objectHash == u {
 		return s
 	}
@@ -140,10 +140,10 @@ func (s *Scope) scopeOf(t lib.Enum) *Scope {
 }
 
 // Looks up the scope of which name is declared and assigns value to the memory space if found.
-func (s *Scope) assignName(name string, value Value, loc *parser.Loc) {
+func (s *Scope) assignName(name *String, value Value, loc *parser.Loc) {
 	declScope := s.resolve(name, s, loc)
 	if t, _ := declScope.varTypes.Get(name); t == ConstDecl {
-		s.errorWithSource(SyntaxError, s.path, *loc, lib.Sprintf("Cannot assign to '%s' because it is a constant.", name))
+		s.errorWithSource(SyntaxError, s.path, *loc, lib.Sprintf("Cannot assign to '%s' because it is a constant.", name.string))
 	}
 	ptr, e := declScope.names.Get(name)
 	if !e && lib.DEBUG_MODE {
@@ -181,7 +181,7 @@ func (s *Scope) errorWithSource(name ErrorName, path int, loc parser.Loc, args .
 	if path == 0 {
 		path = s.path
 	}
-	args = append(args, lib.EOL, lib.SourceLog(path, loc))
+	args = append(args, lib.EOL, lib.DebugMsg(path, loc))
 	s.error(name, args...)
 }
 
@@ -226,8 +226,10 @@ func (s *Scope) throw(builder *strings.Builder) {
 }
 
 func (s *Scope) invalidate() {
-	clear(s.memory)
-	s.names.Clear()
-	s.varTypes.Clear()
-	s.valid = false
+	if s != nil {
+		clear(s.memory)
+		s.names.Clear()
+		s.varTypes.Clear()
+		s.valid = false
+	}
 }

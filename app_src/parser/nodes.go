@@ -20,6 +20,7 @@ const (
 	BITCLEAR_BP
 	ADDITIVE_BP
 	MULTIPLICATIVE_BP
+	EXPONENT_BP
 	UNARY_BP
 	POSTFIX_BP
 	CALL_BP
@@ -27,12 +28,12 @@ const (
 	PRIMARY_BP
 )
 
-type stmtHandler func(*ModuleParser) Node
-type nudHandler func(*ModuleParser) Node
-type ledHandler func(*ModuleParser, Node, BindingPower) Node
+type stmtHandler func(*ModuleParser) *Node
+type nudHandler func(*ModuleParser) *Node
+type ledHandler func(*ModuleParser, *Node, BindingPower) *Node
 
-// type typeNudHandler func(*Parser) Node
-// type typeLedHandler func(*Parser, Node, BindingPower) Node
+// type typeNudHandler func(*Parser) *Node
+// type typeLedHandler func(*Parser, *Node, BindingPower) *Node
 
 var bpLU map[TokenTag]BindingPower = map[TokenTag]BindingPower{}
 
@@ -213,12 +214,12 @@ type Program struct {
 
 type Module struct {
 	Path int
-	Body []Node
+	Body []*Node
 }
 
 type Node struct {
 	Tag      NodeTag
-	Children []Node
+	Children []*Node
 	Data     any
 	Loc      lib.Loc
 }
@@ -228,50 +229,50 @@ type Node struct {
 type Identifier string
 
 type NewExpr struct {
-	Operand Node
+	Operand *Node
 }
 
 type TernaryExpr struct {
-	Condition Node
-	Then      Node
-	Else      Node
+	Condition *Node
+	Then      *Node
+	Else      *Node
 }
 
 type CallExpr struct {
-	Caller Node
-	Args   []Node
+	Caller *Node
+	Args   []*Node
 }
 
 type OperandExpr struct {
-	Operand Node
+	Operand *Node
 }
 
 type LROpExpr struct {
-	Lhs Node
-	Rhs Node
+	Lhs *Node
+	Rhs *Node
 	Op  TokenTag
 }
 
 type OpOpExpr struct {
-	Operand Node
+	Operand *Node
 	Op      TokenTag
 }
 
 type MemberExpr struct {
-	Object   Node
-	Member   Node
+	Object   *Node
+	Member   *Node
 	Computed bool
 }
 
 type IncreExpr struct {
 	Op      TokenTag
-	Operand Node
+	Operand *Node
 	Pre     bool
 }
 
 type Decl struct {
-	Lhs Node
-	Rhs Node
+	Lhs *Node
+	Rhs *Node
 	// Type TypeAnnotation
 }
 
@@ -279,33 +280,33 @@ type NodeIndex = int
 type ObjectProp struct {
 	Computed bool
 	Accessor bool
-	Node
+	*Node
 }
 
 type ObjectDest struct {
 	Props map[NodeIndex]ObjectDestProp
 	// Keys are either (String | Identifier | Number | Computed)
-	Keys []Node
+	Keys []*Node
 }
 
 type ObjectDestProp struct {
 	Computed bool
 	// Value
-	Node
-	Default Node
+	*Node
+	Default *Node
 }
 
 type ObjectLiteral struct {
 	Props map[NodeIndex]ObjectProp
 	// Keys are either (String | Identifier | Number | Computed)
-	Keys []Node
+	Keys []*Node
 }
 
 type MatchExpr struct {
-	Operand Node
-	Cases   map[NodeIndex][]Node
-	Matches []Node
-	Else    []Node
+	Operand *Node
+	Cases   map[NodeIndex][]*Node
+	Matches []*Node
+	Else    []*Node
 }
 
 type FromExpr struct {
@@ -313,7 +314,7 @@ type FromExpr struct {
 }
 
 // type ArrayLiteral struct {
-// 	Elements []Node
+// 	Elements []*Node
 // }
 
 type DeclKind int8
@@ -330,28 +331,28 @@ type VarDecl struct {
 }
 
 type IfStmt struct {
-	Condition Node
-	ElseBlock []Node
+	Condition *Node
+	ElseBlock []*Node
 }
 
 type FnDecl struct {
 	Async     bool
-	Params    []Node
-	Name      Node
+	Params    []*Node
+	Name      *Node
 	Arrow     bool
 	Anonymous bool
 }
 
 type WhileLoop struct {
 	Do        bool
-	Body      []Node
-	Condition Node
+	Body      []*Node
+	Condition *Node
 }
 
 type TForLoop struct {
-	Before    Node
-	Condition Node
-	AfterExec Node
+	Before    *Node
+	Condition *Node
+	AfterExec *Node
 }
 
 const (
@@ -360,49 +361,49 @@ const (
 )
 
 type ForLoop struct {
-	LHS Node
-	RHS Node
+	LHS *Node
+	RHS *Node
 	Op  int
 	DeclKind
 }
 
 type SwitchStmt struct {
-	Condition Node
-	Cases     map[NodeIndex][]Node
-	Matches   []Node
-	Default   []Node
+	Condition *Node
+	Cases     map[NodeIndex][]*Node
+	Matches   []*Node
+	Default   []*Node
 }
 
 type ImportStmt struct {
 	Namespace         string
-	Named             Node // Object Literal Node
+	Named             *Node // Object Literal *Node
 	From              string
 	UseCurrentContext bool
 }
 
 type ExportStmt struct {
-	Exp Node
+	Exp *Node
 }
 
 type ClassDecl struct {
 	Anonymous   bool
-	DefaultProp Node
-	Methods     []Node
-	Props       []Node
-	Constructor Node
-	Extends     Node
+	DefaultProp *Node
+	Methods     []*Node
+	Props       []*Node
+	Constructor *Node
+	Extends     *Node
 	Name        string
 }
 
 type TryCatch struct {
-	try     []Node
-	catch   []Node
-	capture Node
-	finally []Node
+	try     []*Node
+	catch   []*Node
+	capture *Node
+	finally []*Node
 }
 
 type Accessor struct {
 	Getter bool
 	// Function
-	Node
+	*Node
 }

@@ -1,8 +1,6 @@
 package lib
 
-import (
 // "os"
-)
 
 type PDB struct {
 	// file    *os.File
@@ -46,9 +44,9 @@ func (pdb *PDB) Write(path int, loc Loc) (key int) {
 	pdb.keyCount++
 	defer func() {
 		recover()
-		pdb.entries[key] = SourceLog(-1, loc)
+		pdb.entries[key] = DebugMsg(-1, loc)
 	}()
-	pdb.entries[key] = SourceLog(path, loc)
+	pdb.entries[key] = DebugMsg(path, loc)
 	return
 }
 

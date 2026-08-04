@@ -148,3 +148,33 @@ func (arr *Array[T]) Set(idx uintptr, value T) T {
 	arr.allocator[idx] = value
 	return value
 }
+
+// Returns a new array containing the elements of the current array
+// from index startIdx to endIdx (exclusive).
+func (arr *Array[T]) Slice(startIdx, endIdx int) *Array[T] {
+	arr.mutex.RLock()
+	defer arr.mutex.RUnlock()
+	arrLen := arr.Len()
+	if startIdx < 0 {
+		startIdx += arrLen
+	}
+	if endIdx < 0 {
+		endIdx += arrLen
+	}
+	if endIdx >= arrLen {
+		endIdx = arrLen
+	}
+	if startIdx > endIdx {
+		return NewArray[T](0)
+	}
+	length := max(endIdx-startIdx, 0)
+	newArr := NewArray[T](uintptr(length))
+	if length == 0 {
+		return newArr
+	}
+	for range length {
+		newArr.Push(arr.At(startIdx))
+		startIdx++
+	}
+	return newArr
+}

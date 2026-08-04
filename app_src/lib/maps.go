@@ -17,18 +17,31 @@ func NewMap[K comparable, V any]() *Map[K, V] {
 // Adds an entry with key k with value v to the map.
 // If an entry with key k already exists, it is over-written.
 func (m *Map[K, V]) Set(key K, value V) *Map[K, V] {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	m.umap[key] = value
 	return m
 }
 
 // Retrives the entry with key k from the map.
 func (m *Map[K, V]) Get(k K) (V, bool) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 	v, e := m.umap[k]
 	return v, e
 }
 
+// Retrives the entry with key k from the map.
+func (m *Map[K, V]) GetS(k K) V {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.umap[k]
+}
+
 // Deletes entry with key k in m. If there is no such entry, Delete is a no-op.
 func (m *Map[K, V]) Delete(k K) *Map[K, V] {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	delete(m.umap, k)
 	return m
 }
@@ -76,6 +89,8 @@ func (m *Map[K, V]) ForEach(callback func(key K, value V, isLast bool)) {
 
 // Returns the length of the map.
 func (m *Map[K, V]) Len() int {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 	return len(m.umap)
 }
 

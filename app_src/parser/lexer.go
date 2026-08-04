@@ -7,7 +7,7 @@ import (
 type Lexer struct {
 	path           int
 	buffer         []byte
-	len            uintptr
+	length         uintptr
 	line, col, pos uintptr
 	tokens         []Token
 	// the last token location
@@ -21,7 +21,7 @@ func (l *Lexer) Debug(tk Token) {
 func NewLexer(buffer []byte, path int) *Lexer {
 	return &Lexer{
 		buffer: buffer,
-		len:    uintptr(len(buffer)),
+		length: uintptr(len(buffer)),
 		line:   1,
 		col:    1,
 		pos:    0,
@@ -30,24 +30,32 @@ func NewLexer(buffer []byte, path int) *Lexer {
 }
 
 func (l *Lexer) char() rune {
-	if l.pos >= l.len {
+	if l.pos >= l.length {
 		return 0
 	}
-	return rune(l.buffer[l.pos])
+	r, _ := lib.DecodeRune(l.buffer[l.pos:])
+	return r
 }
 
-func (l *Lexer) charAt(idx uintptr) rune {
-	if l.pos+idx >= l.len {
+func (l *Lexer) charAt(idx int) rune {
+	// Return the rune at `idx` runes ahead (idx=0 => current rune)
+	start := l.pos
+	for range idx {
+		if start >= l.length {
+			return 0
+		}
+		_, sz := lib.DecodeRune(l.buffer[start:])
+		start += uintptr(sz)
+	}
+	if start >= l.length {
 		return 0
 	}
-	// if l.pos+idx >= l.len {
-	// 	lib.Panic("index is out of bounds")
-	// }
-	return rune(l.buffer[l.pos+idx])
+	r, _ := lib.DecodeRune(l.buffer[start:])
+	return r
 }
 
 func (l *Lexer) lex() bool {
-	return l.pos < l.len
+	return l.pos < l.length
 	// return l.pos < l.len && l.char() != 0
 }
 
@@ -57,7 +65,7 @@ func (l *Lexer) Loc() lib.Loc {
 		Line:  l.line,
 		Col:   l.col,
 		Start: l.pos,
-		End:   l.pos + 1,
+		End:   l.pos,
 	}
 }
 
@@ -68,19 +76,20 @@ func (l *Lexer) Tokenize() []Token {
 	}
 	// // TODO: review this line..
 	// tokens = append(make([]Token, cap(tokens)*2), tokens...)
-	l.push(Token{
-		tag: EOF,
-		loc: l.Loc(),
-	})
+	l.push(Token{tag: EOF, loc: l.Loc()})
 	return l.tokens
 }
-func (l *Lexer) advance(n uintptr) {
-	if l.pos+n-1 >= l.len {
-		lib.Panic("strange behaviour")
+func (l *Lexer) advance(n int) {
+	// advance n runes
+	for range n {
+		if l.pos >= l.length {
+			lib.Panic("strange behaviour")
+		}
+		_, sz := lib.DecodeRune(l.buffer[l.pos:])
+		l.col += 1
+		l.pos += uintptr(sz)
+		l.loc.End = l.pos
 	}
-	l.col += n
-	l.pos += n
-	l.loc.End = l.pos
 }
 
 func (l *Lexer) push(tk Token) {
@@ -88,6 +97,7 @@ func (l *Lexer) push(tk Token) {
 }
 
 func (l *Lexer) src(tk Token) string {
+	// slice by byte offsets
 	return string(l.buffer[tk.loc.Start:tk.loc.End])
 }
 
@@ -109,7 +119,9 @@ func startToken(l *Lexer) {
 }
 
 const (
+	ExpectedNumericDigitInInt             = "Expected numeric digit in integer literal."
 	ExpectedNumericDigitInFloat           = "Expected numeric digit in float literal."
+	ExpectedNumericDigitInHex             = "Expected numeric digit in numeric literal."
 	UnclosedString                        = "Unterminated string literal."
 	_InNumberMustSeparateSuccessiveDigits = "'_' in number literal must separate successive digits."
 	UnexpectedEOT                         = "Unexpected end of text."
@@ -542,6 +554,10 @@ func (l *Lexer) handleNumber() {
 		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '_':
 			l.lexError(SyntaxError, "Octal literals are not allowed. Use the syntax '0o123'.")
 			return
+		case '.':
+			l.advance(1)
+			l.handleFloat()
+			return
 		default:
 			// Just "0", or "0" followed by invalid char
 			// endToken(l)
@@ -571,6 +587,19 @@ loop:
 			break loop
 		}
 	}
+	// optional exponent
+	if ch := l.char(); ch == 'e' || ch == 'E' {
+		l.advance(1)
+		if l.char() == '+' || l.char() == '-' {
+			l.advance(1)
+		}
+		if !lib.IsDigit(l.char()) {
+			l.lexError(SyntaxError, ExpectedNumericDigitInInt)
+		}
+		for lib.IsDigit(l.char()) {
+			l.advance(1)
+		}
+	}
 	// endToken(l)
 	l.push(token(NUMBER, l.loc))
 }
@@ -585,11 +614,25 @@ func (l *Lexer) handleHex() {
 			l.handleNumSep("hex")
 			return
 		default:
+			// optional exponent
+			if ch := l.char(); ch == 'p' || ch == 'P' {
+				l.advance(1)
+				if l.char() == '+' || l.char() == '-' {
+					l.advance(1)
+				}
+				if !lib.IsDigit(l.char()) {
+					l.lexError(SyntaxError, ExpectedNumericDigitInHex)
+				}
+				for lib.IsDigit(l.char()) {
+					l.advance(1)
+				}
+			}
 			// endToken(l)
 			l.push(token(NUMBER, l.loc))
 			return
 		}
 	}
+	// EOF
 	// endToken(l)
 	l.push(token(NUMBER, l.loc))
 }
@@ -609,6 +652,7 @@ func (l *Lexer) handleOctal() {
 			return
 		}
 	}
+	// EOF
 	// endToken(l)
 	l.push(token(NUMBER, l.loc))
 }
@@ -628,6 +672,7 @@ func (l *Lexer) handleBinary() {
 			return
 		}
 	}
+	// EOF
 	// endToken(l)
 	l.push(token(NUMBER, l.loc))
 }
@@ -663,12 +708,20 @@ func (l *Lexer) handleNumSep(num string) {
 
 // pushes token when done.
 func (l *Lexer) handleFloat() {
-loop:
-	for {
-		if lib.IsDigit(l.char()) {
+	for lib.IsDigit(l.char()) {
+		l.advance(1)
+	}
+	// optional exponent
+	if ch := l.char(); ch == 'e' || ch == 'E' {
+		l.advance(1)
+		if l.char() == '+' || l.char() == '-' {
 			l.advance(1)
-		} else {
-			break loop
+		}
+		if !lib.IsDigit(l.char()) {
+			l.lexError(SyntaxError, ExpectedNumericDigitInFloat)
+		}
+		for lib.IsDigit(l.char()) {
+			l.advance(1)
 		}
 	}
 	// endToken(l)
@@ -692,9 +745,9 @@ func (l *Lexer) lexError(errname ErrorName, additionals ...string) {
 	b.WriteString(lib.Sprintf("%s: ", lib.Red(string(name))))
 	switch errname {
 	case UnrecognisedChar:
-		message = lib.Sprintf("Unrecognised character found in source: %d%s%s", l.char(), lib.EOL, lib.SourceLog(l.path, l.Loc()))
+		message = lib.Sprintf("Unrecognised character found in source: %d%s%s", l.char(), lib.EOL, lib.DebugMsg(l.path, l.Loc()))
 	case SyntaxError:
-		message = lib.Sprintf("%s%s%s", additionals[0], lib.EOL, lib.SourceLog(l.path, l.loc))
+		message = lib.Sprintf("%s%s%s", additionals[0], lib.EOL, lib.DebugMsg(l.path, l.loc))
 		additionals = additionals[1:]
 	default:
 		lib.Panic("unhandled error name")

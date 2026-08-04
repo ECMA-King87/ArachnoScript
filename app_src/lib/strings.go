@@ -56,8 +56,16 @@ func IsBinary(b rune) bool {
 	return b == '0' || b == '1'
 }
 
+func ParseInt(s string, b, bs int) (int64, error) {
+	return strconv.ParseInt(s, b, bs)
+}
+
+func ParseFloat(s string, bs int) (float64, error) {
+	return strconv.ParseFloat(s, bs)
+}
+
 func ParseNumber(s string) float64 {
-	f, err := strconv.ParseFloat(s, 64)
+	f, err := ParseFloat(s, 64)
 	if err != nil {
 		i, err := strconv.ParseInt(s, 0, 64)
 		if err != nil {
@@ -132,4 +140,27 @@ func ReplaceStr(str, old, new string, n int) string {
 
 func EqualFold(s, t string) bool {
 	return strings.EqualFold(s, t)
+}
+
+func IsValidIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	for i, r := range s {
+		if i == 0 {
+			if !(IsAlpha(r) || r == '_' || r == '$') {
+				return false
+			}
+		} else {
+			if !(IsAlpha(r) ||
+				IsDigit(r) ||
+				r == '_' ||
+				r == '$') {
+				return false
+			}
+		}
+	}
+
+	return true
 }

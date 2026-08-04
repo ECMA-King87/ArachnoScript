@@ -56,7 +56,7 @@ func SourceWithinRange(
 		if index+1 == loc.Line {
 			line_source := NewStringBuilder()
 			leading_source := Sprintf("\x1b[33;1m%d |\x1b[0m  ", loc.Line)
-			distance := int(loc.Col) + VisibleLen(leading_source) - (len(lines[index]) - len(line))
+			distance := int(loc.Col-1) + VisibleLen(leading_source) - (len(lines[index]) - len(line))
 			line_source.WriteString(Repeat(" ", distance))
 			// ---------------- ^ ----------------
 			// TODO: This will not go well with multiline source, so find a solution.
@@ -79,7 +79,7 @@ func SourceWithinRange(
 	return sourceAtRange + Sprintf("at (\x1b[34m%s\x1b[0m)%s", PathFromKey(path), EOL)
 }
 
-func SourceLog(path int, loc Loc) string {
+func DebugMsg(path int, loc Loc) string {
 	return SourceWithinRange(path, loc)
 }
 
@@ -118,6 +118,10 @@ func SameObject(a, b any) bool {
 	if v1.Kind() == reflect.String && v2.Kind() == reflect.String {
 		return a == b
 	}
+	return reflect.DeepEqual(a, b)
+}
+
+func DeepEqual(a, b any) bool {
 	return reflect.DeepEqual(a, b)
 }
 

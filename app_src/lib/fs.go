@@ -23,9 +23,9 @@ type CacheFile struct {
 	modTime int64
 }
 
-var paths = map[string]int{}
-var cache = map[int]CacheFile{}
-var unchanged = map[int][]byte{}
+var paths = NewMap[string, int]()
+var cache = NewMap[int, CacheFile]()
+var unchanged = NewMap[int, []byte]()
 
 func UserHomeDir() (string, error) {
 	return os.UserHomeDir()
@@ -34,7 +34,7 @@ func UserHomeDir() (string, error) {
 // Returns the associated key of the cached path.
 // Returns 0 if there is no such cached path.
 func KeyOfPath(path string) int {
-	if k, ok := paths[path]; ok {
+	if k, ok := paths.Get(path); ok {
 		return k
 	}
 	return 0
@@ -43,10 +43,17 @@ func KeyOfPath(path string) int {
 // Returns the path of the cached file with the specified key.
 // If there is no such key, AnonymousPath is returned.
 func PathFromKey(key int) string {
-	for k, v := range paths {
-		if v == key {
-			return k
+	path := ""
+	found := false
+	paths.Until(func(p string, value, _ int) bool {
+		found = value == key
+		if found {
+			path = p
 		}
+		return found
+	})
+	if found {
+		return path
 	}
 	// if DEBUG_MODE && key != 0 {
 	// 	Panic("could not find path with key: " + Sprint(key))
@@ -63,11 +70,11 @@ func ReadUnchangedFile(path string) ([]byte, int, error) {
 	if !IsAbs(path) {
 		path = Abs(path)
 	}
-	if k, ok := paths[path]; ok {
-		return cache[k].b, k, nil
+	if k, ok := paths.Get(path); ok {
+		return cache.GetS(k).b, k, nil
 	}
 	lastKey++
-	paths[path] = lastKey
+	paths.Set(path, lastKey)
 	f, err := os.Open(path)
 	if err != nil {
 	}
@@ -82,10 +89,10 @@ func ReadUnchangedFile(path string) ([]byte, int, error) {
 	if err != nil {
 		return []byte{}, 0, err
 	}
-	cache[lastKey] = CacheFile{
+	cache.Set(lastKey, CacheFile{
 		b:       bytes,
 		modTime: getModTime(info),
-	}
+	})
 	return bytes, lastKey, nil
 }
 
@@ -105,21 +112,21 @@ func WriteAnonymousFile(bytes []byte, key int) int {
 		AnonymousCount--
 		key = AnonymousCount
 	}
-	cache[key] = CacheFile{b: bytes, modTime: 0}
+	cache.Set(key, CacheFile{b: bytes, modTime: 0})
 	return key
 }
 
 func WriteCacheFile(bytes []byte, path string) (key int) {
 	key = lastKey
-	paths[path] = lastKey
-	cache[lastKey] = CacheFile{b: bytes, modTime: 0}
+	paths.Set(path, lastKey)
+	cache.Set(lastKey, CacheFile{b: bytes, modTime: 0})
 	lastKey++
 	return
 }
 
 // ReadFile reads the cached file with the specified key and returns the contents.
 func ReadCachedFile(key int) []byte {
-	if b, ok := cache[key]; ok {
+	if b, ok := cache.Get(key); ok {
 		return b.b
 	}
 	return []byte{}
@@ -136,18 +143,19 @@ func ReadFile(path string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	if content, ok := cache[paths[path]]; ok {
+	k := paths.GetS(path)
+	if content, ok := cache.Get(k); ok {
 		if getModTime(info) == content.modTime {
-			return content.b, paths[path], nil
+			return content.b, k, nil
 		}
 	}
 	content, err := os.ReadFile(path)
 	lastKey++
-	if _, ok := paths[path]; !ok {
-		paths[path] = lastKey
+	if _, ok := paths.Get(path); !ok {
+		paths.Set(path, lastKey)
 	}
-	cache[lastKey] = CacheFile{b: content, modTime: getModTime(info)}
-	return content, paths[path], err
+	cache.Set(lastKey, CacheFile{b: content, modTime: getModTime(info)})
+	return content, paths.GetS(path), err
 }
 
 // Possible errors:

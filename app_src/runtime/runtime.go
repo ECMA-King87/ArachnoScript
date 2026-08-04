@@ -7,8 +7,8 @@ import (
 
 type (
 	Value interface {
-		typeof() string
-		toString() string
+		typeof() *String
+		toString() *String
 		inspect(uint, ValueInspector) string
 	}
 	Boolean bool
@@ -18,7 +18,7 @@ type (
 	}
 	Undefined struct{}
 	Array     struct {
-		hash     uint64
+		hash     uintptr
 		elements *lib.Array[Value]
 	}
 	PropertyDescriptor struct {
@@ -28,7 +28,7 @@ type (
 		setter                                      *Function
 	}
 	Object struct {
-		hash uint64
+		hash uintptr
 		// key: comparable values (number | string | symbol), value: any
 		own   *lib.Map[*String, PropertyDescriptor]
 		proto *Object
@@ -39,7 +39,7 @@ type (
 	}
 	Function struct {
 		name         string
-		params, body []parser.Node
+		params, body []Node
 		async        bool
 		arrow        bool
 		declScope    *Scope
@@ -77,29 +77,27 @@ type (
 	// RAW any
 )
 
-const (
+var (
 	// comparable types
-	NumberType    = "number"
-	StringType    = "string"
-	SymbolType    = "symbol"
-	UndefinedType = "undefined"
-	BooleanType   = "boolean"
+	NumberType    = NewString("number")
+	StringType    = NewString("string")
+	SymbolType    = NewString("symbol")
+	UndefinedType = NewString("undefined")
+	BooleanType   = NewString("boolean")
 	//
-	ObjectType   = "object"
-	FunctionType = "function"
-	ClassType    = "class"
-	MacroType    = "macro"
-	ArrayType    = "array"
-	InstanceType = "instance"
-	ScopeType    = "scope"
-	RawType      = "raw"
+	ObjectType   = NewString("object")
+	FunctionType = NewString("function")
+	ClassType    = NewString("class")
+	MacroType    = NewString("macro")
+	ArrayType    = NewString("array")
+	InstanceType = NewString("instance")
+	ScopeType    = NewString("scope")
+	RawType      = NewString("raw")
+
+	AnyType = NewString("any")
 )
 
-var ComparableTypes = []string{NumberType, StringType, SymbolType, BooleanType, UndefinedType}
-
-// func toValidPropKey(v Value) string {
-// 	return v.toString()
-// }
+// var ComparableTypes = []*String{NumberType, StringType, SymbolType, BooleanType, UndefinedType}
 
 // ############# Number #############
 
@@ -108,7 +106,7 @@ var (
 	NaN      = Number(lib.NaN)
 )
 
-func (n Number) typeof() string {
+func (n Number) typeof() *String {
 	return NumberType
 }
 
@@ -122,17 +120,25 @@ func (n Number) IsFinite() bool {
 		n != -Infinity
 }
 
-func (n Number) toString() string {
+var (
+	InfinityStr    = NewString("Infinity")
+	NegInfinityStr = NewString("-Infinity")
+	NaNStr         = NewString("NaN")
+)
+
+func (n Number) toString() *String {
 	if n == Infinity {
-		return "Infinity"
+		return InfinityStr
+	} else if n == -Infinity {
+		return NegInfinityStr
 	} else if n.IsNaN() {
-		return "NaN"
+		return NaNStr
 	}
-	return lib.Sprint(n)
+	return NewString(lib.Sprint(n))
 }
 
 func (n Number) inspect(uint, ValueInspector) string {
-	return lib.Yellow(n.toString())
+	return lib.Yellow(n.toString().string)
 }
 
 // ############# String #############
@@ -163,12 +169,12 @@ func NewString(s string) *String {
 	return str
 }
 
-func (str *String) typeof() string {
+func (str *String) typeof() *String {
 	return StringType
 }
 
-func (str *String) toString() string {
-	return str.string
+func (str *String) toString() *String {
+	return str
 }
 
 func (str *String) inspect(d uint, _ ValueInspector) string {
@@ -185,28 +191,36 @@ var (
 	False Boolean = false
 )
 
-func (Boolean) typeof() string {
+func (Boolean) typeof() *String {
 	return BooleanType
 }
 
-func (b Boolean) toString() string {
-	return lib.Sprint(b)
+var TrueStr = NewString("true")
+var FalseStr = NewString("false")
+
+func (b Boolean) toString() *String {
+	if b {
+		return TrueStr
+	}
+	return FalseStr
 }
 
 func (b Boolean) inspect(uint, ValueInspector) string {
-	return lib.Yellow(b.toString())
+	return lib.Yellow(b.toString().string)
 }
 
 // ############# Undefined #############
 
 var undefined *Undefined = &Undefined{}
 
-func (*Undefined) typeof() string {
+func (*Undefined) typeof() *String {
 	return UndefinedType
 }
 
-func (*Undefined) toString() string {
-	return "undefined"
+var UndefinedStr = NewString("undefined")
+
+func (*Undefined) toString() *String {
+	return UndefinedStr
 }
 
 func (*Undefined) inspect(uint, ValueInspector) string {
@@ -220,17 +234,26 @@ var null *Object
 
 // ############# Object #############
 
-func (obj *Object) typeof() string {
+func (obj *Object) typeof() *String {
 	return ObjectType
 }
 
-func (obj *Object) toString() string {
-	return "[object]"
+var ObjectStr = NewString("[object]")
+var ThisStr = NewString("this")
+var NullStr = NewString("null")
+
+func (obj *Object) toString() *String {
+	if obj == nil {
+		return NullStr
+	}
+	return ObjectStr
 }
+
+var NullInspect = lib.Bold(lib.White("null"))
 
 func (obj *Object) inspect(d uint, inspector ValueInspector) string {
 	if obj == nil {
-		return lib.Bold(lib.White("null"))
+		return NullInspect
 	}
 	if obj.own.Len() == 0 {
 		return "{}"
@@ -260,7 +283,7 @@ func (obj *Object) inspect(d uint, inspector ValueInspector) string {
 	obj.own.ForEach(func(key *String, pd PropertyDescriptor, last bool) {
 		b.WriteString(prefix)
 		name := key.string
-		if isValidIdentifier(name) {
+		if lib.IsValidIdentifier(name) {
 			b.WriteString(name)
 		} else {
 			b.WriteString(lib.Green(lib.Quote(name)))
@@ -290,29 +313,6 @@ func (obj *Object) set(key *String, val Value) {
 		obj.own.Set(key, DefaultPropDesc(val))
 	}
 	hashValue(obj)
-}
-
-func isValidIdentifier(s string) bool {
-	if s == "" {
-		return false
-	}
-
-	for i, r := range s {
-		if i == 0 {
-			if !(lib.IsAlpha(r) || r == '_' || r == '$') {
-				return false
-			}
-		} else {
-			if !(lib.IsAlpha(r) ||
-				lib.IsDigit(r) ||
-				r == '_' ||
-				r == '$') {
-				return false
-			}
-		}
-	}
-
-	return true
 }
 
 func NewObject() *Object {
@@ -351,12 +351,12 @@ func PropDesc(value Value,
 
 // ############# Instance #############
 
-func (inst *Instance) typeof() string {
+func (inst *Instance) typeof() *String {
 	return InstanceType
 }
 
-func (inst *Instance) toString() string {
-	return "[object]"
+func (inst *Instance) toString() *String {
+	return ObjectStr
 }
 
 func (inst *Instance) inspect(d uint, Inspector ValueInspector) string {
@@ -365,26 +365,28 @@ func (inst *Instance) inspect(d uint, Inspector ValueInspector) string {
 
 // ############# Symbol #############
 
-func (sym *Symbol) typeof() string {
+func (sym *Symbol) typeof() *String {
 	return SymbolType
 }
 
-func (sym *Symbol) toString() string {
-	return "Symbol(" + sym.description + ")"
+func (sym *Symbol) toString() *String {
+	return NewString("Symbol(" + sym.description + ")")
 }
 
 func (sym *Symbol) inspect(d uint, _ ValueInspector) string {
-	return lib.Green(sym.toString())
+	return lib.Green(sym.toString().string)
 }
 
 // ############# ScopeObject #############
 
-func (so *ScopeObject) typeof() string {
+func (so *ScopeObject) typeof() *String {
 	return ScopeType
 }
 
-func (so *ScopeObject) toString() string {
-	return "[object (Scope)]"
+var ScopeObjStr = NewString("[object (Scope)]")
+
+func (so *ScopeObject) toString() *String {
+	return ScopeObjStr
 }
 
 func (so *ScopeObject) inspect(d uint, Inspector ValueInspector) string {
@@ -395,12 +397,11 @@ func scopeToObject(so *ScopeObject) *Object {
 	if so.Object == nil {
 		so.Object = NewObject()
 	}
-	so.names.ForEach(func(name string, ptr int, _ bool) {
-		k := NewString(name)
+	so.names.ForEach(func(name *String, ptr int, _ bool) {
 		if ptr < 0 || ptr >= len(so.memory) {
-			so.Object.own.Set(k, DefaultPropDesc(undefined))
+			so.Object.own.Set(name, DefaultPropDesc(undefined))
 		} else {
-			so.Object.own.Set(k, DefaultPropDesc(so.memory[ptr]))
+			so.Object.own.Set(name, DefaultPropDesc(so.memory[ptr]))
 		}
 	})
 	return so.Object
@@ -408,40 +409,42 @@ func scopeToObject(so *ScopeObject) *Object {
 
 // ############# Function #############
 
-func (fn *Function) typeof() string {
+func (fn *Function) typeof() *String {
 	return FunctionType
 }
 
-func (fn *Function) toString() string {
-	return "[function " + fn.name + "]"
+func (fn *Function) toString() *String {
+	return NewString("[function " + fn.name + "]")
 }
 
 func (fn *Function) inspect(d uint, _ ValueInspector) string {
-	return lib.Cyan(fn.toString())
+	return lib.Cyan(fn.toString().string)
 }
 
 // ############# Class #############
 
-func (class *Class) typeof() string {
+func (class *Class) typeof() *String {
 	return ClassType
 }
 
-func (class *Class) toString() string {
-	return "[class " + class.name + "]"
+func (class *Class) toString() *String {
+	return NewString("[class " + class.name + "]")
 }
 
 func (class *Class) inspect(d uint, _ ValueInspector) string {
-	return lib.Cyan(class.toString())
+	return lib.Cyan(class.toString().string)
 }
 
 // ############# Macro #############
 
-func (m *Macro) typeof() string {
+func (m *Macro) typeof() *String {
 	return MacroType
 }
 
-func (m *Macro) toString() string {
-	return "[macro]"
+var MacroStr = NewString("[macro]")
+
+func (m *Macro) toString() *String {
+	return MacroStr
 }
 
 func (m *Macro) inspect(d uint, _ ValueInspector) string {
@@ -461,12 +464,14 @@ func MK_MACRO(name string, f MacroCallback) *Macro {
 
 // ############## Array ##############
 
-func (arr *Array) typeof() string {
+func (arr *Array) typeof() *String {
 	return ArrayType
 }
 
-func (arr *Array) toString() string {
-	return "[array]"
+var ArrayStr = NewString("[array]")
+
+func (arr *Array) toString() *String {
+	return ArrayStr
 }
 
 func (arr *Array) inspect(d uint, Inspector ValueInspector) string {
@@ -572,36 +577,40 @@ func NewArray() *Array {
 // ################### Pointer ###################
 // ###############################################
 
-func (m *Pointer) typeof() string {
-	return m.value().typeof()
+func (p *Pointer) typeof() *String {
+	return p.value().typeof()
 }
 
-func (m *Pointer) toString() string {
-	return m.value().toString()
+func (p *Pointer) toString() *String {
+	return p.value().toString()
 }
 
-func (m *Pointer) inspect(d uint, Inspector ValueInspector) string {
-	return m.value().inspect(d, Inspector)
+func (p *Pointer) inspect(d uint, Inspector ValueInspector) string {
+	return p.value().inspect(d, Inspector)
 }
 
-func (m *Pointer) value() Value {
-	return m.memory[m.ptr]
+func (p *Pointer) value() Value {
+	return p.memory[p.ptr]
 }
 
 // ###############################################
 // ################### RAW ###################
 // ###############################################
 
-func (v *RAW) typeof() string {
+// type ErrorType struct {
+// 	name, msg, stack *String
+// }
+
+func (v *RAW) typeof() *String {
 	return RawType
 }
 
-func (v *RAW) toString() string {
-	return lib.Sprint(v.value)
+func (v *RAW) toString() *String {
+	return NewString(lib.Sprint(v.value))
 }
 
 func (v *RAW) inspect(uint, ValueInspector) string {
-	return v.toString()
+	return lib.Dull("RAW(") + v.toString().string + lib.Dull(")")
 }
 
 func MK_RAW(v any) *RAW {

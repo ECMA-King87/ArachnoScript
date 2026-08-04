@@ -12,11 +12,11 @@ type (
 	MicroTaskQueue struct {
 		queue []Value
 	}
-	Runtime struct {
-	}
-	Worker struct {
+	Runtime struct{}
+	Worker  struct {
+		// workerPool chan Node
 		runtime   *Runtime
-		callstack *lib.Array[CallFrame]
+		callstack *lib.Array[*CallFrame]
 		stack     *lib.Array[Value]
 		// *parser.Program
 		// *parser.ModuleParser
@@ -78,14 +78,8 @@ func (r *Runtime) Worker(isRepl bool) *Worker {
 	return newWorker(r, isRepl)
 }
 
-func (*Runtime) ParseModule(path string, builtin, isMain, isRepl bool) (p *parser.ModuleParser) {
-	if builtin {
-		p = parser.NewBuiltinsParser(path)
-	} else {
-		p = parser.NewModuleParser(path, isMain, isRepl)
-	}
-	p.Parse()
-	return
+func (*Runtime) ParseProgram(path string, builtin, isMain, isRepl bool) *parser.ModuleParser {
+	return parser.GlobalParser.ParseProgram(path, builtin, isMain, isRepl)
 }
 
 func newWorker(r *Runtime, isRepl bool) *Worker {
@@ -93,16 +87,28 @@ func newWorker(r *Runtime, isRepl bool) *Worker {
 		TaskQueue:      TaskQueue{queue: []Value{}},
 		MicroTaskQueue: MicroTaskQueue{queue: []Value{}},
 		runtime:        r,
-		callstack:      lib.NewArray[CallFrame](10),
+		callstack:      lib.NewArray[*CallFrame](10),
 		stack:          lib.NewArray[Value](1),
-		progCtx:        nil,
-		isRepl:         isRepl,
-		returned:       false,
-		_break:         false,
-		_continue:      false,
-		terminate:      false,
+		// workerPool:     make(chan Node, lib.NumCPU),
+		progCtx:   nil,
+		isRepl:    isRepl,
+		returned:  false,
+		_break:    false,
+		_continue: false,
+		terminate: false,
 	}
 }
+
+// // Creates a coroutine
+// func (w *Worker) Co(n Node) {
+// 	w.workerPool <- n
+// }
+
+// func (w *Worker) StartTasks() {
+// 	for task := range w.workerPool {
+// 		w.progCtx.EvalStmt(task)
+// 	}
+// }
 
 func (w *Worker) crash() {
 	// if lib.DEBUG_MODE {
@@ -113,16 +119,17 @@ func (w *Worker) crash() {
 }
 
 var UndefinedHash = hashValue(undefined)
+
 var globalThis = func() *ScopeObject {
 	scopeObject := &ScopeObject{NewScope(nil, UndefinedHash, GlobalScope, 0), null}
-	scopeObject.init("null", null, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("undefined", undefined, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("true", True, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("false", False, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("Infinity", Infinity, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("NaN", NaN, ConstDecl, lib.DumbyLoc)
-	scopeObject.init("#_stdin", MK_RAW(lib.Stdin), ConstDecl, lib.DumbyLoc)
-	scopeObject.init("#_stdout", MK_RAW(lib.Stdout), ConstDecl, lib.DumbyLoc)
+	scopeObject.init(NullStr, null, ConstDecl, lib.DumbyLoc)
+	scopeObject.init(UndefinedStr, undefined, ConstDecl, lib.DumbyLoc)
+	scopeObject.init(TrueStr, True, ConstDecl, lib.DumbyLoc)
+	scopeObject.init(FalseStr, False, ConstDecl, lib.DumbyLoc)
+	scopeObject.init(InfinityStr, Infinity, ConstDecl, lib.DumbyLoc)
+	scopeObject.init(NaNStr, NaN, ConstDecl, lib.DumbyLoc)
+	scopeObject.init(NewString("#_stdin"), MK_RAW(lib.Stdin), ConstDecl, lib.DumbyLoc)
+	scopeObject.init(NewString("#_stdout"), MK_RAW(lib.Stdout), ConstDecl, lib.DumbyLoc)
 	return scopeObject
 }()
 
@@ -149,14 +156,20 @@ func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 		case parser.T_IMPORT:
 			stmt := node.Data.(parser.ImportStmt)
 			key := parser.GlobalParser.Imports[stmt.From]
+			if prog.Path == key {
+				ctx.errorWithSource(Error, 0, node.Loc, "This module imports itself.")
+			}
 			lib.Assert(key != 0)
 			module := parser.GlobalParser.Program.Modules[key]
 			if stmt.UseCurrentContext {
-				origPath := ctx.path
-				ctx.path = key
-				exps := w.ExecModule(module)
+				worker := newWorker(w.runtime, false)
+				exps := worker.ExecModule(module)
+				// w.progCtx.names.Copy(worker.progCtx.names)
+				worker.progCtx.names.ForEach(func(name *String, ptr int, _ bool) {
+					varType, _ := worker.progCtx.varTypes.Get(name)
+					w.progCtx.init(name, worker.progCtx.memory[ptr], varType, node.Loc)
+				})
 				exports.own.Copy(exps.own)
-				ctx.path = origPath
 			} else {
 				worker := newWorker(w.runtime, false)
 				exps := worker.ExecModule(module)
@@ -164,18 +177,18 @@ func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 					names := stmt.Named.Data.(parser.ObjectLiteral)
 					for i, K := range names.Keys {
 						alias := names.Props[i]
-						name := ""
+						var name *String
 						var key *String
 						switch K.Tag {
 						case parser.T_IDENT:
 							if alias.Tag == parser.T_INVALID {
-								name = string(K.Data.(parser.Identifier))
+								name = NewString(string(K.Data.(parser.Identifier)))
 								break
 							}
 							fallthrough
 						default:
-							name = string(alias.Data.(parser.Identifier))
-							key = NewString(name)
+							name = NewString(string(alias.Data.(parser.Identifier)))
+							key = name
 						}
 						var value Value = undefined
 						if pd, ok := exports.own.Get(key); ok {
@@ -185,7 +198,7 @@ func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 					}
 				}
 				if stmt.Namespace != "" {
-					ctx.init(stmt.Namespace, exps, ConstDecl, node.Loc)
+					ctx.init(NewString(stmt.Namespace), exps, ConstDecl, node.Loc)
 				}
 			}
 		case parser.T_EXPORT:
@@ -202,7 +215,7 @@ func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 	return
 }
 
-func (ctx *EvalContext) ExecBlock(block []parser.Node) (terminate, cont, br bool) {
+func (ctx *EvalContext) ExecBlock(block []Node) (terminate, cont, br bool) {
 	for i := 0; i < len(block) && ctx.valid; i++ {
 		node := block[i]
 		var rtv Value = undefined
@@ -230,7 +243,9 @@ func (ctx *EvalContext) ExecBlock(block []parser.Node) (terminate, cont, br bool
 	return
 }
 
-func (ctx *EvalContext) EvalLabel(i *int, node parser.Node, block []parser.Node) *Undefined {
+var benchmarkCount int
+
+func (ctx *EvalContext) EvalLabel(i *int, node Node, block []Node) *Undefined {
 	*i++
 	label := node.Data.(string)
 	if *i >= len(block) {
@@ -240,18 +255,35 @@ func (ctx *EvalContext) EvalLabel(i *int, node parser.Node, block []parser.Node)
 	labeled := block[*i]
 	switch label {
 	case "debug":
-		lib.Stdout.WriteString(
-			ctx.Inspect(ctx.EvalStmt(labeled)) + lib.EOL)
+		if labeled.Tag == parser.T_LABEL {
+			ctx.errorWithSource(SyntaxError, 0, node.Loc, "Label ", "@", label, " cannot take another label as a statement.")
+		} else {
+			lib.Stdout.WriteString(
+				ctx.Inspect(ctx.EvalStmt(labeled)) + lib.EOL)
+		}
 	case "coroutine":
 		// to carry out a benchmark on a coroutine, do a `@coroutine` on `@benchmark`
+		// to make it `@coroutine @benchmark ...`
 		lib.Go(func() {
-			ctx.EvalStmt(labeled)
+			if labeled.Tag == parser.T_LABEL {
+				ctx.EvalLabel(i, labeled, block)
+			} else {
+				ctx.EvalStmt(labeled)
+			}
 		})
 	case "benchmark":
-		t := lib.TimeNow()
-		ctx.EvalStmt(labeled)
-		d := lib.TimeSince(t)
-		lib.Stdout.WriteString(d.String() + lib.EOL)
+		if labeled.Tag == parser.T_LABEL && labeled.Data == "coroutine" {
+			ctx.errorWithSource(SyntaxError, 0, node.Loc, "Label ", "@", label, " cannot take label @coroutine as a statement.",
+				lib.EOL, "Do `@coroutine @benchmark ...` instead.")
+		} else {
+			benchmarkCount++
+			id := benchmarkCount
+			t := lib.TimeNow()
+			ctx.EvalStmt(labeled)
+			d := lib.TimeSince(t)
+			lib.Stdout.WriteString("Benchmark " + lib.Sprint(id) + "took ")
+			lib.Stdout.WriteString(d.String() + "." + lib.EOL)
+		}
 	default:
 		ctx.errorWithSource(SyntaxError, 0, node.Loc, "Unknown label: ", label)
 	}
@@ -268,7 +300,7 @@ func (ctx *EvalContext) EvalStmt(node Node) Value {
 	case parser.T_EXPORT:
 		scope.errorWithSource(SyntaxError, 0, node.Loc, "An export declaration can only be used at the top level of a module.")
 	case parser.T_BLOCK:
-		return ctx.evalBlockStmt(scope, node)
+		return ctx.evalBlockStmt(node)
 	case parser.T_VARDECL:
 		return ctx.evalVarDecl(node)
 	case parser.T_FNDECL:
@@ -283,6 +315,10 @@ func (ctx *EvalContext) EvalStmt(node Node) Value {
 		return ctx.evalContinueStmt(node)
 	case parser.T_RETURN:
 		return ctx.evalReturnStmt(node)
+	case parser.T_SWITCHSTMT:
+		return ctx.evalSwitchStmt(node)
+	case parser.T_THROW:
+		return ctx.evalThrowStmt(node)
 	default:
 		return ctx.EvalExpr(node)
 	}
@@ -334,6 +370,10 @@ func (ctx *EvalContext) EvalExpr(node Node) Value {
 		return ctx.evalAssignmentExpr(node)
 	case parser.T_NOT:
 		return ctx.evalNotExpr(node)
+	case parser.T_INCREEXPR:
+		return ctx.evalIncreExpr(node)
+	case parser.T_LOGICAL:
+		return ctx.evalLogicalExpr(node)
 	default:
 		scope.errorWithSource(BuildError, 0, node.Loc, "Unhandled AST node.")
 	}
@@ -428,15 +468,17 @@ func (i *ValueInspector) walkObject(obj *Object) {
 	})
 }
 
+type CMP_OP lib.Enum
+
 const (
-	CMP_EQUALS lib.Enum = iota
+	CMP_EQUALS CMP_OP = iota
 	// CMP_EQUALS2
 
 	CMP_GREATERTHAN
 	CMP_LESSTHAN
 )
 
-func compareVals(a Value, b Value, op lib.Enum) bool {
+func compareVals(a Value, b Value, op CMP_OP) bool {
 	switch op {
 	case CMP_EQUALS:
 		// null
@@ -455,8 +497,14 @@ func compareVals(a Value, b Value, op lib.Enum) bool {
 				return a.(*Symbol).description == b.(*Symbol).description
 			case UndefinedType:
 				return true
-			case ObjectType, ArrayType, ClassType, FunctionType, InstanceType, MacroType:
-				return getValueHash(a) == getValueHash(b)
+			case ClassType, FunctionType, MacroType:
+				// Compare Identity (pointers)
+				return a == b
+			case ObjectType, ArrayType, InstanceType:
+				if getValueHash(a) != getValueHash(b) {
+					return false
+				}
+				return lib.DeepEqual(a, b)
 			}
 		}
 		return false
@@ -470,21 +518,24 @@ func compareVals(a Value, b Value, op lib.Enum) bool {
 	}
 }
 
-func getValueHash(a Value) uint64 {
+func getValueHash(a Value) uintptr {
 	switch v := a.(type) {
 	case *Object:
+		if v == nil {
+			return 0
+		}
 		if v.hash == 0 {
-			hashValue(v)
+			return hashValue(v)
 		}
 		return v.hash
 	case *Array:
 		if v.hash == 0 {
-			hashValue(v)
+			return hashValue(v)
 		}
 		return v.hash
 	case *Instance:
 		if v.hash == 0 {
-			hashValue(v)
+			return hashValue(v)
 		}
 		return v.hash
 	default:
@@ -492,8 +543,10 @@ func getValueHash(a Value) uint64 {
 	}
 }
 
-func hashValue(a Value) uint64 {
-	hash := uint64(0)
+const HashSeed = 3
+
+func hashValue(a Value) uintptr {
+	hash := uintptr(0)
 	if a == nil {
 		return 0
 	}
@@ -506,18 +559,25 @@ func hashValue(a Value) uint64 {
 	case *Undefined:
 		return ^hash
 	case *Array:
-		v.elements.ForEach(func(i int, el Value) {
-			v.hash += uint64(i) + getValueHash(el)
-		})
+		if v.hash == 0 {
+			v.elements.ForEach(func(i int, el Value) {
+				v.hash += hashValue(Number(i))
+				v.hash += getValueHash(el)
+				v.hash *= HashSeed
+			})
+		}
 		hash = v.hash
 	case *Object:
 		if v == nil {
 			return 0
 		}
-		v.own.ForEach(func(key *String, pd PropertyDescriptor, _ bool) {
-			v.hash += getValueHash(key)
-			v.hash += getValueHash(pd.value)
-		})
+		if v.hash == 0 {
+			v.own.ForEach(func(key *String, pd PropertyDescriptor, _ bool) {
+				v.hash += getValueHash(key)
+				v.hash += getValueHash(pd.value)
+				v.hash *= HashSeed
+			})
+		}
 		hash = v.hash
 	// does not check prototype chain
 	case *Instance:
@@ -525,20 +585,21 @@ func hashValue(a Value) uint64 {
 			v.own.ForEach(func(key *String, pd PropertyDescriptor, _ bool) {
 				v.hash += getValueHash(key)
 				v.hash += getValueHash(pd.value)
+				v.hash *= HashSeed
 			})
-			v.hash += uint64(lib.PointerOf(v.proto))
+			v.hash += (lib.PointerOf(v.proto))
 		}
 		hash = v.hash
 	case *String:
-		return uint64(uintptr(lib.Pointer(v)))
+		return uintptr(lib.Pointer(v))
 	case Number:
-		hash = *(*uint64)(lib.Pointer(&v))
+		hash = uintptr(*(*uint64)(lib.Pointer(&v)))
 	case *Class:
-		return uint64(uintptr(lib.Pointer(v)))
+		return uintptr(lib.Pointer(v))
 	case *Function:
-		return uint64(uintptr(lib.Pointer(v)))
+		return uintptr(lib.Pointer(v))
 	case *Macro:
-		return uint64(uintptr(lib.Pointer(v)))
+		return uintptr(lib.Pointer(v))
 	}
 	return hash
 }

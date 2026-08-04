@@ -7,13 +7,27 @@ import (
 	"aspire/are/main/parser"
 )
 
-type Node = parser.Node
+type Node = *parser.Node
 
 var PDB = lib.NewPDB("src")
 
-func (ctx *EvalContext) evalFnStmt(node parser.Node) *Function {
-	fn := ctx.evalFnExpr(node)
-	ctx.init(fn.name, fn, ConstDecl, node.Loc)
+func (ctx *EvalContext) evalFnStmt(node Node) *Function {
+	decl := node.Data.(parser.FnDecl)
+	name := decl.Name.Data.(string)
+	obj := NewObject()
+	obj.proto = NewObject()
+	obj.proto.own.Set(NewString("name"), PropDesc(NewString(string(name)), false, false, false, true, nil, nil))
+	fn := &Function{
+		name:      string(name),
+		body:      node.Children,
+		async:     decl.Async,
+		arrow:     decl.Arrow,
+		Object:    obj,
+		declScope: ctx.Scope,
+		params:    decl.Params,
+		Loc:       node.Loc,
+	}
+	ctx.init(NewString(fn.name), fn, ConstDecl, node.Loc)
 	return fn
 }
 
@@ -128,10 +142,45 @@ func (ctx *EvalContext) evalReturnStmt(node Node) *Undefined {
 	return undefined
 }
 
-func (*EvalContext) evalBlockStmt(scope *Scope, node Node) Value {
-	blockCtx := NewContext(NewScope(scope, UndefinedHash, BlockScope, 0))
+func (ctx *EvalContext) evalThrowStmt(node Node) *Undefined {
+	expr := node.Children[0]
+	ctx.error(Error, ctx.EvalExpr(expr).toString().string)
+	return undefined
+}
+
+func (ctx *EvalContext) evalBlockStmt(node Node) Value {
+	blockCtx := NewContext(NewScope(ctx.Scope, UndefinedHash, BlockScope, 0))
 	blockCtx.ExecBlock(node.Children)
 	blockCtx.invalidate()
+	return undefined
+}
+
+func (ctx *EvalContext) evalSwitchStmt(node Node) Value {
+	stmt := node.Data.(parser.SwitchStmt)
+	cond := stmt.Condition
+	blockCtx := NewContext(NewScope(ctx.Scope, UndefinedHash, SwitchScope, 0))
+	// Use blockCtx and EvalStmt for the case of var decls.
+	condValue := blockCtx.EvalStmt(cond)
+	noMatch := true
+	for i, match := range stmt.Matches {
+		if compareVals(condValue, blockCtx.EvalExpr(match), CMP_EQUALS) {
+			noMatch = false
+			t, c, b := blockCtx.ExecBlock(stmt.Cases[i])
+			blockCtx.invalidate()
+			if t && c && b {
+				// fallthrough
+				if i+1 >= len(stmt.Matches) {
+					ctx.errorWithSource(SyntaxError, 0, node.Loc, "Cannot fallthrough final case in switch.")
+				}
+				continue
+			}
+			break
+		}
+	}
+	if noMatch && len(stmt.Default) > 0 {
+		blockCtx.ExecBlock(stmt.Default)
+		blockCtx.invalidate()
+	}
 	return undefined
 }
 
@@ -141,12 +190,12 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 	val := ctx.EvalExpr(right)
 	switch left.Tag {
 	case parser.T_IDENT:
-		name := string(left.Data.(parser.Identifier))
+		name := NewString(string(left.Data.(parser.Identifier)))
 		ctx.init(name, val, varType, left.Loc)
 	case parser.T_ARRAY_LIT:
 		names := left.Children
-		if ctx.typeof(val) != ArrayType {
-			ctx.errorWithSource(TypeError, ctx.path, right.Loc, "Cannot array destructure type ", ctx.typeof(val), ".")
+		if val.typeof() != ArrayType {
+			ctx.errorWithSource(TypeError, ctx.path, right.Loc, "Cannot array destructure type ", val.typeof().string, ".")
 		}
 		arr := val.(*Array)
 		for i, name := range names {
@@ -157,24 +206,24 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 					ctx.errorWithSource(SyntaxError, ctx.path, name.Loc, "A rest element must be last in a destructuring pattern.")
 				}
 				operand := name.Data.(Node)
-				ident := string(operand.Data.(parser.Identifier))
 				collected := NewArray()
 				for j := i; j < arrLen; j++ {
 					collected.push(arr.elements.At(j))
 				}
+				ident := NewString(string(operand.Data.(parser.Identifier)))
 				ctx.init(ident, collected, varType, name.Loc)
 				break
 			} else {
 				if arrLen > i {
 					el = arr.elements.At(i)
 				}
-				ident := string(name.Data.(parser.Identifier))
+				ident := NewString(string(name.Data.(parser.Identifier)))
 				ctx.init(ident, el, varType, name.Loc)
 			}
 		}
 	case parser.T_OBJECT_LIT:
-		if ctx.typeof(val) != ObjectType {
-			ctx.errorWithSource(TypeError, ctx.path, right.Loc, "Cannot object destructure type ", ctx.typeof(val), ".")
+		if val.typeof() != ObjectType {
+			ctx.errorWithSource(TypeError, ctx.path, right.Loc, "Cannot object destructure type ", val.typeof().string, ".")
 		}
 		dest := left.Data.(parser.ObjectDest)
 		props := dest.Props
@@ -182,12 +231,11 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 			prop := props[idx]
 			var keyVal *String
 			var value Value
-			name := ""
-			name = string(prop.Data.(parser.Identifier))
+			name := NewString(string(prop.Data.(parser.Identifier)))
 			if prop.Computed {
-				keyVal = NewString(ctx.EvalExpr(key).toString())
+				keyVal = ctx.EvalExpr(key).toString()
 			} else {
-				keyVal = NewString(name)
+				keyVal = name
 			}
 			obj := val.(*Object)
 			value = lookupMember(obj, keyVal, nil)
@@ -203,9 +251,9 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 	return val
 }
 
-func lookupProp(obj *Object, keyVal *String, seen map[uint64]bool) (owner *Object, desc PropertyDescriptor, found bool) {
+func lookupProp(obj *Object, keyVal *String, seen map[uintptr]bool) (owner *Object, desc PropertyDescriptor, found bool) {
 	if seen == nil {
-		seen = make(map[uint64]bool, 8)
+		seen = make(map[uintptr]bool, 8)
 	}
 	h := getValueHash(obj)
 	if seen[h] {
@@ -234,8 +282,8 @@ func (ctx *EvalContext) getMember(obj *Object, keyVal *String) Value {
 	if desc.getter != nil {
 		fnCtx := NewContext(NewFunctionScope(desc.getter, this))
 		ctx.declareParams(desc.getter, []Node{}, Args{}, fnCtx)
-		fnCtx.init("this", this, ConstDecl, desc.getter.Loc)
-		return ctx.execFrame(desc.getter, fnCtx)
+		fnCtx.init(ThisStr, this, ConstDecl, desc.getter.Loc)
+		return ctx.execFrame(desc.getter, fnCtx, desc.getter.Loc)
 	} else if desc.setter != nil {
 		// set-only value
 		return undefined
@@ -252,24 +300,24 @@ func (ctx *EvalContext) setMember(obj *Object, keyVal *String, value Value, scop
 	if desc.setter != nil {
 		fnCtx := NewContext(NewFunctionScope(desc.setter, this))
 		ctx.declareParams(desc.setter, []Node{}, Args{value}, fnCtx)
-		fnCtx.init("this", this, ConstDecl, desc.setter.Loc)
-		ctx.execFrame(desc.setter, fnCtx)
+		fnCtx.init(ThisStr, this, ConstDecl, desc.setter.Loc)
+		ctx.execFrame(desc.setter, fnCtx, loc)
 	}
 	if desc.getter != nil || !desc.writeable {
-		scope.errorWithSource(SyntaxError, scope.path, loc, "Cannot assign to '%s' because it is a read-only property.", keyVal.toString())
+		scope.errorWithSource(SyntaxError, scope.path, loc, "Cannot assign to '%s' because it is a read-only property.", keyVal.toString().string)
 	}
 	if desc.public || scope.findScopeWith(getValueHash(obj)) != nil {
 		obj.own.Set(keyVal, PropDesc(value, desc.configurable, desc.enumerable, desc.writeable, desc.public, desc.getter, desc.setter))
 	} else {
-		scope.errorWithSource(SyntaxError, scope.path, loc, "Cannot assign to '%s' because it is not an exposed property.", keyVal.toString())
+		scope.errorWithSource(SyntaxError, scope.path, loc, "Cannot assign to '%s' because it is not an exposed property.", keyVal.toString().string)
 	}
 	return value
 }
 
 // Bypass descriptor rules
-func lookupMember(obj *Object, keyVal *String, seen map[uint64]bool) Value {
+func lookupMember(obj *Object, keyVal *String, seen map[uintptr]bool) Value {
 	if seen == nil {
-		seen = make(map[uint64]bool, 8)
+		seen = make(map[uintptr]bool, 8)
 	}
 	h := getValueHash(obj)
 	if seen[h] {
@@ -302,12 +350,12 @@ func (ctx *EvalContext) evalUnaryExpr(node Node) Number {
 	operand := expr.Operand
 	v := ctx.EvalExpr(operand)
 	if expr.Op == parser.PLUS {
-		if ctx.typeof(v) != StringType {
+		if v.typeof() != StringType {
 			ctx.errorWithSource(TypeError, ctx.path, node.Loc, "The operand of '+' operator must be of type string.")
 		}
 		return Number(lib.ParseNumber(v.(*String).string))
 	}
-	if ctx.typeof(v) != NumberType {
+	if v.typeof() != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, node.Loc, "The operand of '-' operator must be of type number.")
 	}
 	return -v.(Number)
@@ -319,10 +367,10 @@ func (ctx *EvalContext) evalBinaryExpr(node Node) Value {
 	right := expr.Rhs
 	a := ctx.EvalExpr(left)
 	b := ctx.EvalExpr(right)
-	typeofA := ctx.typeof(a)
-	typeofB := ctx.typeof(b)
+	typeofA := a.typeof()
+	typeofB := a.typeof()
 	if typeofA == StringType || typeofB == StringType {
-		return NewString(a.toString() + b.toString())
+		return NewString(a.(*String).string + b.(*String).string)
 	}
 	const err = "The operands of an arithmetic operator must be of type number."
 	if typeofA != NumberType {
@@ -360,14 +408,14 @@ func (ctx *EvalContext) evalBinaryOp(a, b Number, op parser.TokenTag, loc parser
 	return 0
 }
 
-func (ctx *EvalContext) evalBitwiseBinaryExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalBitwiseBinaryExpr(node Node) Value {
 	expr := node.Data.(parser.LROpExpr)
 	var a, b = ctx.EvalExpr(expr.Lhs), ctx.EvalExpr(expr.Rhs)
 	const err = "The operands of an arithmetic operator must be of type number."
-	if ctx.typeof(a) != NumberType {
+	if a.typeof() != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, expr.Lhs.Loc, err)
 	}
-	if ctx.typeof(b) != NumberType {
+	if a.typeof() != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, expr.Rhs.Loc, err)
 	}
 	return ctx.evalBitwiseOp(node.Tag, a.(Number), b.(Number))
@@ -395,11 +443,11 @@ func (ctx *EvalContext) evalBitwiseOp(tag parser.NodeTag, a, b Number) Value {
 	return null
 }
 
-func (ctx *EvalContext) evalBitwiseNotExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalBitwiseNotExpr(node Node) Value {
 	expr := node.Data.(parser.OperandExpr).Operand
 	a := ctx.EvalExpr(expr)
 	const err = "The operand of the bitwise not operator (~) must be of type number."
-	if ctx.typeof(a) != NumberType {
+	if a.typeof() != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, expr.Loc, err)
 	}
 	return ctx.evalBitwiseNot(a.(Number))
@@ -456,21 +504,21 @@ func (*EvalContext) compareWith(op parser.TokenTag, a Value, b Value, scope *Sco
 	return False
 }
 
-func (ctx *EvalContext) evalCompareList(node parser.Node) Value {
+func (ctx *EvalContext) evalCompareList(node Node) Value {
 	ctx.errorWithSource(SyntaxError, ctx.path, node.Loc, "This expression can only appear in comparison expressions at the left-hand-side of comparison operators.")
 	return undefined
 }
 
-func (ctx *EvalContext) evalIdent(node parser.Node) Value {
+func (ctx *EvalContext) evalIdent(node Node) Value {
 	ident := node.Data.(parser.Identifier)
-	return ctx.getValue(string(ident), &node.Loc)
+	return ctx.getValue(NewString(string(ident)), &node.Loc)
 }
 
-func (ctx *EvalContext) evalTypeof(node parser.Node) *String {
-	return NewString(ctx.typeof(ctx.EvalExpr(node.Data.(parser.OperandExpr).Operand)))
+func (ctx *EvalContext) evalTypeof(node Node) *String {
+	return ctx.EvalExpr(node.Data.(parser.OperandExpr).Operand).typeof()
 }
 
-func (ctx *EvalContext) evalNullishExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalNullishExpr(node Node) Value {
 	expr := node.Data.(parser.LROpExpr)
 	a := ctx.EvalExpr(expr.Lhs)
 	if valueIsNullish(a) {
@@ -479,7 +527,7 @@ func (ctx *EvalContext) evalNullishExpr(node parser.Node) Value {
 	return a
 }
 
-func (ctx *EvalContext) evalArrayLit(node parser.Node) *Array {
+func (ctx *EvalContext) evalArrayLit(node Node) *Array {
 	arr := NewArray()
 	for _, el := range node.Children {
 		arr.push(ctx.EvalExpr(el))
@@ -487,7 +535,7 @@ func (ctx *EvalContext) evalArrayLit(node parser.Node) *Array {
 	return arr
 }
 
-func (ctx *EvalContext) evalObjectLit(node parser.Node) *Object {
+func (ctx *EvalContext) evalObjectLit(node Node) *Object {
 	object := NewObject()
 	expr := node.Data.(parser.ObjectLiteral)
 	for idx, key := range expr.Keys {
@@ -497,7 +545,7 @@ func (ctx *EvalContext) evalObjectLit(node parser.Node) *Object {
 			propKey = NewString(string(key.Data.(parser.Identifier)))
 		} else {
 			keyValue := ctx.EvalExpr(key)
-			propKey = NewString(keyValue.toString())
+			propKey = NewString(keyValue.toString().string)
 		}
 		switch prop.Tag {
 		case parser.T_FNDECL:
@@ -515,7 +563,7 @@ func (ctx *EvalContext) evalObjectLit(node parser.Node) *Object {
 			decl := prop.Data.(parser.ClassDecl)
 			if decl.Anonymous {
 				prop.Data = parser.ClassDecl{
-					Name:        propKey.toString(),
+					Name:        propKey.toString().string,
 					Anonymous:   decl.Anonymous,
 					DefaultProp: decl.DefaultProp,
 					Methods:     decl.Methods,
@@ -527,7 +575,7 @@ func (ctx *EvalContext) evalObjectLit(node parser.Node) *Object {
 		}
 		if prop.Accessor {
 			decl := prop.Node.Data.(parser.FnDecl)
-			fn := ctx.EvalExpr(Node{
+			fn := ctx.EvalExpr(&parser.Node{
 				Tag:      parser.T_FNDECL,
 				Children: prop.Children,
 				Data:     decl,
@@ -548,7 +596,7 @@ func (ctx *EvalContext) evalObjectLit(node parser.Node) *Object {
 	return object
 }
 
-func (ctx *EvalContext) evalGroupingExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalGroupingExpr(node Node) Value {
 	var value Value
 	exprs := node.Children
 	exprsLen := len(exprs)
@@ -561,9 +609,15 @@ func (ctx *EvalContext) evalGroupingExpr(node parser.Node) Value {
 	return value
 }
 
-func (ctx *EvalContext) evalFnExpr(node parser.Node) *Function {
+func (ctx *EvalContext) evalFnExpr(node Node) *Function {
 	decl := node.Data.(parser.FnDecl)
-	name := decl.Name.Data.(string)
+	name := ""
+	if decl.Name.Tag == parser.T_STRING {
+		name = decl.Name.Data.(string)
+	}
+	if decl.Name.Tag == parser.T_IDENT {
+		name = string(decl.Name.Data.(parser.Identifier))
+	}
 	obj := NewObject()
 	obj.proto = NewObject()
 	obj.proto.own.Set(NewString("name"), PropDesc(NewString(name), false, false, false, true, nil, nil))
@@ -580,7 +634,7 @@ func (ctx *EvalContext) evalFnExpr(node parser.Node) *Function {
 	return fn
 }
 
-func (ctx *EvalContext) evalCallExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalCallExpr(node Node) Value {
 	expr := node.Data.(parser.CallExpr)
 	caller := expr.Caller
 	callerVal := ctx.EvalExpr(caller)
@@ -588,13 +642,13 @@ func (ctx *EvalContext) evalCallExpr(node parser.Node) Value {
 	return ctx.callWithThis(callerVal, callerVal, expr.Args, args, &node.Loc)
 }
 
-func (ctx *EvalContext) evalArgs(args []parser.Node) Args {
+func (ctx *EvalContext) evalArgs(args []Node) Args {
 	argsVals := Args{}
 	for _, arg := range args {
 		if arg.Tag == parser.T_RESTORSPREAD {
 			operand := ctx.EvalExpr(arg.Data.(Node))
-			if ctx.typeof(operand) != ArrayType {
-				ctx.errorWithSource(TypeError, ctx.path, arg.Loc, "Cannot array spread type ", ctx.typeof(operand), ".")
+			if operand.typeof() != ArrayType {
+				ctx.errorWithSource(TypeError, ctx.path, arg.Loc, "Cannot array spread type ", operand.typeof().string, ".")
 			}
 			arr := operand.(*Array)
 			arr.elements.ForEach(func(_ int, v Value) {
@@ -620,21 +674,21 @@ start:
 			callEnv.errorWithSource(BuildError, callEnv.path, *loc, "Async functions are not functional yet.")
 		}
 		if fn.arrow {
-			fnCtx.init("this", thisVal, ConstDecl, fn.Loc)
+			fnCtx.init(ThisStr, thisVal, ConstDecl, fn.Loc)
 		} else {
-			fnCtx.init("this", NewObject(), ConstDecl, fn.Loc)
+			fnCtx.init(ThisStr, NewObject(), ConstDecl, fn.Loc)
 		}
 		ctx.declareParams(fn, argsNodes, args, fnCtx)
-		return ctx.execFrame(fn, fnCtx)
+		return ctx.execFrame(fn, fnCtx, *loc)
 	case *Macro:
 		return fn.call(args, ctx, loc)
 	default:
-		callEnv.errorWithSource(TypeError, callEnv.path, *loc, lib.Sprintf("This expression is not callable. Type '%s' is not a function.", ctx.typeof(fn)))
+		callEnv.errorWithSource(TypeError, callEnv.path, *loc, lib.Sprintf("This expression is not callable. Type '%s' is not a function.", fn.typeof().string))
 	}
 	return null
 }
 
-func (ctx *EvalContext) evalMemberExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalMemberExpr(node Node) Value {
 	expr := node.Data.(parser.MemberExpr)
 	objNode := expr.Object
 	object := ctx.EvalExpr(objNode)
@@ -647,20 +701,20 @@ start:
 		object = obj.value()
 		goto start
 	default:
-		ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Cannot read properties of %s (reading '%s')", lib.Green(ctx.typeof(obj)), memberKey.toString()))
+		ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Cannot read properties of %s (reading '%s')", obj.typeof().string, lib.Green(memberKey.toString().string)))
 	case *Object:
 		return ctx.getMember(obj, memberKey.(*String))
 	case *Array:
-		if ctx.typeof(memberKey) != NumberType {
-			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type array.", lib.Green(ctx.typeof(memberKey))))
+		if obj.typeof() != NumberType {
+			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type array.", lib.Green(obj.typeof().string)))
 		}
 		idx := int(lib.TruncFloat(float64(memberKey.(Number))))
 		if idx < obj.elements.Len() {
 			return obj.elements.At(idx)
 		} // undefined
 	case *String:
-		if ctx.typeof(memberKey) != NumberType {
-			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type string.", lib.Green(ctx.typeof(memberKey))))
+		if obj.typeof() != NumberType {
+			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type string.", lib.Green(obj.typeof().string)))
 		}
 		idx := int(lib.TruncFloat(float64(memberKey.(Number))))
 		if idx < len(obj.string) {
@@ -692,30 +746,37 @@ func (ctx *EvalContext) memberKey(expr parser.MemberExpr) Value {
 }
 
 type CallFrame struct {
-	fn    *Function
-	scope *EvalContext
+	fn *Function
+	// Essentially for stack message
+	// callEnv *EvalContext
+	callEnvPath int
+	callEnvLoc  lib.Loc
+	scope       *EvalContext
 }
 
 const MAX_CALLSTACK_SIZE = 1_000_000
 
 // ctx is the EvalContext of the callsite.
-func (ctx *EvalContext) execFrame(fn *Function, fnCtx *EvalContext) Value {
+func (ctx *EvalContext) execFrame(fn *Function, fnCtx *EvalContext, loc lib.Loc) Value {
 	if ctx.callstack.Len() >= MAX_CALLSTACK_SIZE {
 		ctx.stackOverFlow()
 	}
-	ctx.callstack.Push(CallFrame{
-		fn:    fn,
-		scope: fnCtx,
+	ctx.callstack.Push(&CallFrame{
+		fn:          fn,
+		scope:       fnCtx,
+		callEnvPath: ctx.path,
+		callEnvLoc:  loc,
 	})
 	fnCtx.ExecBlock(fn.body)
-	if ctx.returned {
-		ctx.returned = false
-		ctx.terminate = false
+	if fnCtx.returned {
+		fnCtx.returned = false
+		fnCtx.terminate = false
 	} else {
-		ctx.stack.Push(undefined)
+		fnCtx.stack.Push(undefined)
 	}
-	rtv := ctx.stack.Pop()
+	rtv := fnCtx.stack.Pop()
 	switch rtv.(type) {
+	// Closures
 	case *Function:
 	default:
 		fnCtx.invalidate()
@@ -747,16 +808,16 @@ func (ctx *EvalContext) declareParams(fn *Function, argsNodes []Node, args Args,
 	}
 }
 
-func (ctx *EvalContext) declareParam(p, argNode parser.Node, argument Value, i int, args Args, callEnv *Scope) (shouldReturn bool) {
+func (ctx *EvalContext) declareParam(p, argNode Node, argument Value, i int, args Args, callEnv *Scope) (shouldReturn bool) {
 	switch p.Tag {
 	case parser.T_IDENT:
 		switch argument.(type) {
 		case *String, Number, *Pointer:
 			break
 		default:
-			// Only identifiers for noctx.
+			// Only identifiers for now.
 			if argNode.Tag == parser.T_IDENT {
-				name := string(argNode.Data.(parser.Identifier))
+				name := NewString(string(argNode.Data.(parser.Identifier)))
 				s := callEnv.resolve(name, callEnv, &argNode.Loc)
 				ptr, _ := s.names.Get(name)
 				argument = &Pointer{
@@ -765,7 +826,7 @@ func (ctx *EvalContext) declareParam(p, argNode parser.Node, argument Value, i i
 				}
 			}
 		}
-		ctx.init(string(p.Data.(parser.Identifier)), argument, MutableDecl, p.Loc)
+		ctx.init(NewString(string(p.Data.(parser.Identifier))), argument, MutableDecl, p.Loc)
 	case parser.T_RESTORSPREAD:
 		node := p.Data.(Node)
 		arr := NewArray()
@@ -783,7 +844,7 @@ func (ctx *EvalContext) declareParam(p, argNode parser.Node, argument Value, i i
 	return false
 }
 
-func (ctx *EvalContext) evalAssignmentExpr(node parser.Node) Value {
+func (ctx *EvalContext) evalAssignmentExpr(node Node) Value {
 	expr := node.Data.(parser.LROpExpr)
 	lhs := expr.Lhs
 	rhs := expr.Rhs
@@ -800,15 +861,15 @@ func (ctx *EvalContext) evalAssignmentExpr(node parser.Node) Value {
 	return ctx.handleAssign(op, left, right, node.Loc, lhs, rhs)
 }
 
-func (ctx *EvalContext) handleAssign(op parser.TokenTag, left Value, right Value, loc parser.Loc, lhs, rhs parser.Node) Value {
+func (ctx *EvalContext) handleAssign(op parser.TokenTag, left Value, right Value, loc parser.Loc, lhs, rhs Node) Value {
 	// isEqualsAssign := false
 	validatedForArithmeticAssign := false
 	goto skip
 errorOnArithmeticAssign:
-	if ctx.typeof(left) != NumberType {
+	if left.typeof() != NumberType {
 		ctx.errorWithSource(SyntaxError, ctx.path, lhs.Loc, "The left-hand side of an arithmetic operation must be of type 'number'.")
 	}
-	if ctx.typeof(right) != NumberType {
+	if right.typeof() != NumberType {
 		ctx.errorWithSource(SyntaxError, ctx.path, rhs.Loc, "The right-hand side of an arithmetic operation must be of type 'number'.")
 	}
 skip:
@@ -889,7 +950,7 @@ skip:
 	default:
 		ctx.errorWithSource(SyntaxError, ctx.path, lhs.Loc, "The left-hand side of an assignment expression must be a variable or a property access.")
 	case parser.T_IDENT:
-		name := string(lhs.Data.(parser.Identifier))
+		name := NewString(string(lhs.Data.(parser.Identifier)))
 		ctx.assignName(name, right, &lhs.Loc)
 	case parser.T_MEMBER:
 		expr := lhs.Data.(parser.MemberExpr)
@@ -907,27 +968,29 @@ skip:
 			// Array index is already validated when evaluating left.
 			idx := float64(memberVal.(Number))
 			if lib.Modulo(idx, 1) != 0 || idx < 0 {
-				ctx.errorWithSource(TypeError, ctx.path, lhs.Loc, "Array index must be a positive integer, received negative or floating point number ", memberVal.toString(), ".")
+				ctx.errorWithSource(TypeError, ctx.path, lhs.Loc, "Array index must be a positive integer, received negative or floating point number ", memberVal.toString().string, ".")
 			}
 			return obj.elements.Set(uintptr(idx), right)
 		case *Object:
-			return ctx.setMember(obj, memberVal.(*String), right, ctx.Scope, loc)
+			return ctx.setMember(obj, toValidPropKey(memberVal), right, ctx.Scope, loc)
 		case *Instance:
-			return ctx.setMember(obj.Object, memberVal.(*String), right, ctx.Scope, loc)
+			return ctx.setMember(obj.Object, toValidPropKey(memberVal), right, ctx.Scope, loc)
 		case *ScopeObject:
 			name := memberVal.toString()
 			if _, ok := obj.names.Get(name); ok {
-				// If the value exists in scope
+				// If the name exists in scope
 				obj.assignName(name, right, &lhs.Loc)
 			} else {
 				obj.init(name, right, MutableDecl, lhs.Loc)
 			}
+		case *Function:
+			return ctx.setMember(obj.Object, toValidPropKey(memberVal), right, ctx.Scope, loc)
 		default:
-			ctx.errorWithSource(BuildError, ctx.path, loc, "Cannot assign to type ", ctx.typeof(objectVal), ".")
+			ctx.errorWithSource(BuildError, ctx.path, loc, "Cannot assign to type ", obj.typeof().string, ".")
 		}
 	case parser.T_ARRAY_LIT:
-		if ctx.typeof(right) != ArrayType {
-			ctx.errorWithSource(TypeError, ctx.path, rhs.Loc, "Cannot array destructure type ", ctx.typeof(right), ".")
+		if right.typeof() != ArrayType {
+			ctx.errorWithSource(TypeError, ctx.path, rhs.Loc, "Cannot array destructure type ", right.typeof().string, ".")
 		}
 		els := lhs.Children
 		arr := right.(*Array)
@@ -955,17 +1018,55 @@ skip:
 	return right
 }
 
-func (ctx *EvalContext) evalNotExpr(node parser.Node) Value {
+func toValidPropKey(prop Value) *String {
+	if prop.typeof() == StringType {
+		return prop.(*String)
+	}
+	return NewString(prop.toString().string)
+}
+
+func (ctx *EvalContext) evalNotExpr(node Node) Value {
 	operand := node.Data.(parser.OperandExpr).Operand
 	val := ctx.EvalExpr(operand)
 	return !valueIsTruthy(val)
 }
 
-// A safe alternative to Value.typeof()
-func (ctx *EvalContext) typeof(v Value) string {
-	if v == nil {
-		// null
-		return ObjectType
+func (ctx *EvalContext) evalIncreExpr(node Node) Value {
+	expr := node.Data.(parser.IncreExpr)
+	operand, pre, op := expr.Operand, expr.Pre, expr.Op
+	val := ctx.EvalExpr(operand)
+	if val.typeof() != NumberType {
+		ctx.errorWithSource(TypeError, 0, node.Loc, "Operand of an arithmetic operation must be a number.")
 	}
-	return v.typeof()
+	n := val.(Number)
+	if pre {
+		switch op {
+		case parser.MINUS2:
+			return ctx.handleAssign(parser.PLUS_EQUALS, n, n-1, node.Loc, operand, operand)
+		case parser.PLUS2:
+			return ctx.handleAssign(parser.PLUS_EQUALS, n, n+1, node.Loc, operand, operand)
+		}
+	} else {
+		switch op {
+		case parser.MINUS2:
+			ctx.handleAssign(parser.PLUS_EQUALS, n, n-1, node.Loc, operand, operand)
+		case parser.PLUS2:
+			ctx.handleAssign(parser.PLUS_EQUALS, n, n+1, node.Loc, operand, operand)
+		}
+	}
+	return n
+}
+
+func (ctx *EvalContext) evalLogicalExpr(node Node) Value {
+	expr := node.Data.(parser.LROpExpr)
+	left, op := expr.Lhs, expr.Op
+	val := ctx.EvalExpr(left)
+	cond := bool(valueIsTruthy(val))
+	switch {
+	case op == parser.OR && cond:
+		return val
+	case op == parser.AND && !cond:
+		return val
+	}
+	return ctx.EvalExpr(expr.Rhs)
 }
