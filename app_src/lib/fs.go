@@ -71,24 +71,34 @@ func ReadUnchangedFile(path string) ([]byte, int, error) {
 		path = Abs(path)
 	}
 	if k, ok := paths.Get(path); ok {
-		return cache.GetS(k).b, k, nil
+		if cached, ok := cache.Get(k); ok {
+			return cached.b, k, nil
+		}
 	}
-	lastKey++
-	paths.Set(path, lastKey)
+
 	f, err := os.Open(path)
 	if err != nil {
+		return nil, 0, err
 	}
 	defer f.Close()
+
 	info, err := os.Stat(path)
-	size := int64(0)
-	if err == nil {
-		size = info.Size()
-	}
-	bytes := make([]byte, size)
-	_, err = f.Read(bytes)
 	if err != nil {
-		return []byte{}, 0, err
+		return nil, 0, err
 	}
+
+	size := info.Size()
+	bytes := make([]byte, size)
+	if size > 0 {
+		n, err := io.ReadFull(f, bytes)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return nil, 0, err
+		}
+		bytes = bytes[:n]
+	}
+
+	lastKey++
+	paths.Set(path, lastKey)
 	cache.Set(lastKey, CacheFile{
 		b:       bytes,
 		modTime: getModTime(info),
@@ -97,7 +107,7 @@ func ReadUnchangedFile(path string) ([]byte, int, error) {
 }
 
 func getModTime(info os.FileInfo) int64 {
-	return info.ModTime().Unix()
+	return info.ModTime().UnixNano()
 }
 
 var AnonymousCount = 0
@@ -143,19 +153,24 @@ func ReadFile(path string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+
 	k := paths.GetS(path)
 	if content, ok := cache.Get(k); ok {
 		if getModTime(info) == content.modTime {
 			return content.b, k, nil
 		}
 	}
+
 	content, err := os.ReadFile(path)
-	lastKey++
-	if _, ok := paths.Get(path); !ok {
-		paths.Set(path, lastKey)
+	if err != nil {
+		return nil, 0, err
 	}
-	cache.Set(lastKey, CacheFile{b: content, modTime: getModTime(info)})
-	return content, paths.GetS(path), err
+
+	lastKey++
+	k = lastKey
+	paths.Set(path, k)
+	cache.Set(k, CacheFile{b: content, modTime: getModTime(info)})
+	return content, k, nil
 }
 
 // Possible errors:

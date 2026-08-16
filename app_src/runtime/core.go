@@ -133,8 +133,11 @@ var globalThis = func() *ScopeObject {
 
 // exports == nil when prog.Invalid == true
 func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
+	if prog == nil {
+		return nil
+	}
 	if prog.Invalid {
-		return
+		return nil
 	}
 	exports = NewObject()
 	defer func() {

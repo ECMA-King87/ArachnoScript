@@ -10,12 +10,13 @@
  */
 
 /*
- * ARE Macros Library
+ * ARE runtime macro declarations.
  * Version: 0.2.5
  *
- * This file declares the public macro API for the ARE runtime. It provides
- * type declarations and utility functions used throughout the standard
- * library.
+ * This file documents the public macro API exposed by the interpreter. The
+ * declarations below describe the functions and types the standard library and
+ * runtime expect callers to use when working with strings, files, objects,
+ * symbols, JSON, and WebAssembly.
  */
 
 /*
@@ -84,24 +85,29 @@ declare function random(n: number): number;
  */
 
 /**
- * Returns the string representation of the value `v`.
- * Mimics JavaScript's String() constructor.
+ * Produces the string representation of `v`.
+ * This behaves like JavaScript's String() conversion and is useful for
+ * debugging and human-readable output.
  *
- * @param v - The value to convert to a string.
- * @returns A string representation of `v`.
+ * @param v - The value to convert.
+ * @returns A string version of `v`.
  */
 declare function to_string(v: any): string;
 /**
- * Converts / coerces the given value to a string.
- * Useful for converting byte arrays (slices) to string values.
+ * Coerces `v` to a string in a runtime-friendly way.
+ * This is especially useful when converting byte slices or raw values into
+ * textual output.
  *
  * @param v - The value to convert.
  * @returns The converted string.
  */
 declare function string_cast(v: any): string;
 /**
- * Converts / coerces the given value to a number.
- * Useful for converting bytes to AS numbers.
+ * Coerces `v` to a numeric value if possible.
+ * This is useful for interpreting byte values and other raw numeric payloads.
+ *
+ * @param v - The value to convert.
+ * @returns A numeric value or NaN when conversion is not valid.
  */
 declare function number_cast(v: any): number;
 
@@ -114,36 +120,38 @@ declare function number_cast(v: any): number;
 // 'os' prefix denotes that it takes a path as its argument
 
 /**
- * Opens the file at the specified path for reading.
+ * Opens a file at the given path for reading.
  *
- * If successful, the returned file object can be used for read operations. The
- * underlying file descriptor will be opened in read-only mode (O_RDONLY).
+ * The returned handle can be used with the file-system macros below for reading,
+ * writing, or inspecting the file.
  *
- * @param path - Path to the file to open.
+ * @param path - The path to the file to open.
  * @returns A file handle for the opened file.
  */
 declare function os_open_file(path: string): raw<os.File>;
 
-// 'fs' prefix denotes that it takes a os file as its argument
+// 'fs' prefix denotes functions that operate on an operating-system file handle.
 
 /**
- * Closes the file, rendering it unusable for I/O.
- * @param f File to close.
+ * Closes a file handle.
+ * After this call, the handle is no longer usable for I/O.
+ *
+ * @param f - The file to close.
  */
 declare function fs_close_file(f: raw<os.File>): void;
 /**
- * Reads up to `length(buffer)` bytes from the file `f` into `buffer`.
+ * Reads data from `f` into `buffer`.
+ *
+ * The function fills as much of `buffer` as possible and returns the number of
+ * bytes actually read.
  *
  * @param f - The file to read from.
- * @param buffer - The buffer to receive the data.
- * @returns The number of bytes read, or a negative value on error.
+ * @param buffer - The destination buffer.
+ * @returns The number of bytes read.
  */
 declare function fs_read_file(f: raw<os.File>, buffer: raw<byte[]>): number;
 /**
- * Writes the bytes from `buffer` to the file `f`.
- *
- * This function will fail with an "Access Denied" error if the process lacks
- * write permissions for `f`.
+ * Writes the contents of `buffer` to `f`.
  *
  * @param f - The file to write to.
  * @param buffer - The bytes to write.
@@ -151,26 +159,38 @@ declare function fs_read_file(f: raw<os.File>, buffer: raw<byte[]>): number;
  */
 declare function fs_write_file(f: raw<os.File>, buffer: raw<byte[]>): number;
 /**
- * Returns a (raw) object with the description of the file f.
+ * Returns file metadata for `f` as a raw OS file-info object.
+ *
+ * @param f - The file whose metadata should be inspected.
+ * @returns A raw file-info object.
  */
 declare function fs_stats(f: raw<os.File>): raw<os.FileInfo>;
 /**
- * Returns the file size (number of bytes) specified by the
- * file description in `info`.
+ * Returns the size of a file in bytes.
+ *
+ * @param info - The file metadata returned by `fs_stats`.
+ * @returns The number of bytes in the file.
  */
 declare function fs_stats_size(info: raw<os.FileInfo>): number;
 /**
- * Returns the name of a file specified by the
- * file description in `info`.
+ * Returns the file name recorded in the file metadata.
+ *
+ * @param info - The file metadata returned by `fs_stats`.
+ * @returns The file name.
  */
 declare function fs_stats_name(info: raw<os.FileInfo>): string;
 /**
- * Returns the last modification time of a file specified by the
- * file description in `info`.
+ * Returns the last modification time of the file in Unix-seconds form.
+ *
+ * @param info - The file metadata returned by `fs_stats`.
+ * @returns The file's modification time.
  */
 declare function fs_stats_mod_time(info: raw<os.FileInfo>): number;
 /**
- * Returns the true if `info` describes a directory and false otherwise.
+ * Reports whether the file described by `info` is a directory.
+ *
+ * @param info - The file metadata returned by `fs_stats`.
+ * @returns `true` when the path is a directory, otherwise `false`.
  */
 declare function fs_stats_is_dir(info: raw<os.FileInfo>): boolean;
 
@@ -181,17 +201,18 @@ declare function fs_stats_is_dir(info: raw<os.FileInfo>): boolean;
  */
 
 /**
- * Returns the current execution scope object.
+ * Returns the current execution scope.
  *
- * This can be used to inspect or manipulate scope-local values.
+ * This exposes the active lexical environment so callers can inspect or modify the
+ * current scope state at runtime.
  *
- * @returns The current scope object.
+ * @returns The active scope object.
  */
 declare function get_context(): scope;
 /**
- * Sets the current execution scope to `ctx`.
+ * Replaces the active execution scope with `ctx`.
  *
- * @param ctx - The scope object to activate as the current scope.
+ * @param ctx - The scope object to activate.
  */
 declare function set_context(ctx: scope): void;
 
@@ -213,24 +234,27 @@ declare function new_byte_array(...bytes: number[]): raw<byte[]>;
  */
 
 /**
- * Stringifies the given ArachnoScript value into its corresponding
- * JSON representation.
- * @param obj Object to stringify.
- * @param indent Flag reporting whether the output JSON should be formatted or indented.
+ * Serializes an ArachnoScript value into a JSON string.
+ *
+ * @param obj - The value to stringify.
+ * @param indent - When `true`, the output is formatted with indentation.
+ * @returns A JSON-formatted string.
  */
 declare function json_stringify(obj: any, indent: boolean): string;
 /**
- * Parses a JSON string and returns the corresponding
- * ArachnoScript value.
- * @param str JSON text.
+ * Parses a JSON string and returns the corresponding ArachnoScript value.
+ *
+ * @param str - The JSON source text.
+ * @returns The reconstructed runtime value.
  */
 declare function json_parse(str: string): any;
 
 /**
- * Returns the element at the specified index in the given indexable value.
- * @param v The indexable value.
- * @param idx The index of the element to return.
- * @returns The element at the specified index.
+ * Returns the element at `idx` from an indexable value.
+ *
+ * @param v - The array-like or string-like value to read from.
+ * @param idx - The index to access.
+ * @returns The value at that position.
  */
 declare function at<E>(v: Indexable<E>, idx: number): E;
 
@@ -241,19 +265,29 @@ declare function at<E>(v: Indexable<E>, idx: number): E;
  */
 
 /**
- * Creates a new WASM runtime.
+ * Creates a fresh WebAssembly runtime instance.
+ *
+ * @returns A runtime handle for compiling and instantiating WASM modules.
  */
 declare function new_wasm_runtime(): raw<WebAssemblyRuntime>;
 /**
- * Decodes a WASM binary to WASM module.
- * @param runtime WASM runtime.
- * @param bytes WASM binary.
+ * Compiles a raw WASM binary into a module for the provided runtime.
+ *
+ * @param runtime - The WebAssembly runtime to use.
+ * @param bytes - The binary WASM payload.
+ * @returns A compiled WebAssembly module.
  */
 declare function wasm_compile(
   runtime: raw<WebAssemblyRuntime>,
   bytes: raw<byte[]>,
 ): raw<WebAssemblyModule>;
 
+/**
+ * Instantiates a compiled WebAssembly module.
+ *
+ * @param module - The module to instantiate.
+ * @returns A live WebAssembly instance.
+ */
 declare function wasm_instantiate(
   module: raw<WebAssemblyModule>,
 ): raw<WebAssemblyInstance>;
@@ -274,47 +308,63 @@ declare function wasm_get_export(
 declare function wat_to_wasm(bytes: raw<byte[]>): raw<byte[]>;
 
 /**
- * Switches to interactive REPL mode and returns after REPL is closed.
+ * Starts the interactive REPL session and blocks until it exits.
+ *
+ * This is primarily useful for debugging or manually evaluating ArachnoScript
+ * expressions at runtime.
  */
 declare function repl(): void;
 /**
- * Parses an integer from the given string using the provided base / radix (0, 2 to 36).
- * The string may begin with a leading sign: "+" or "-".
- * If the base argument is 0, the true base is implied by the string's prefix following the sign (if present): 2 for "0b", 8 for "0" or "0o", 16 for "0x", and 10 otherwise.
- * Also, for argument base 0 only, an underscore character is permitted to separate successive digits.
- * `10` is a valid decimal number, `0b1010` is a valid binary number, `0o12` is a valid octal number, and `0xA` is a valid hexadecimal number.
- * `10_000`, `0b1010_0000`, `0o12_34`, and `0xA_B_C` are all valid numbers with underscores.
- * The function returns the parsed number as a 64-bit floating-point value.
- * If the string cannot be parsed as a valid number, it returns NaN.
- * @param str
- * @param radix
+ * Parses a signed integer from a string using the provided radix.
+ *
+ * Radix values from 2 to 36 are supported, and `0` follows the usual C-style
+ * prefixes for binary, octal, hexadecimal, and decimal literals. Underscores are
+ * allowed when radix is `0` for readability.
+ *
+ * If parsing fails, the function returns `NaN`.
+ *
+ * @param str - The source string to parse.
+ * @param radix - The base to use for parsing.
+ * @returns The parsed integer value as a number.
  */
 declare function parse_int(str: string, radix: number): number;
+/**
+ * Parses a floating-point number from a string.
+ *
+ * @param str - The numeric text to parse.
+ * @returns The parsed value, or `NaN` if parsing fails.
+ */
 declare function parse_float(str: string): number;
 
 /**
- * Reports whether `n` is a finite number.
- * @param n
+ * Checks whether `n` is a finite number.
+ *
+ * @param n - The numeric value to inspect.
+ * @returns `true` when the value is finite, otherwise `false`.
  */
 declare function is_finite(n: number): boolean;
 /**
- * Returns the integral part of the numeric expression x, removing any fractional digits.
- * If x is already an integer, the result is x.
- * @param n
+ * Removes the fractional portion of `n` and keeps the integer part.
+ *
+ * @param n - The numeric value to truncate.
+ * @returns The truncated number.
  */
 declare function trunc_num(n: number): number;
 
 /**
- * Returns a stack trace with `n` number frames.
- * @param n Number of frames to collect.
+ * Returns a stack trace containing up to `n` call frames.
+ *
+ * @param n - The maximum number of frames to capture.
+ * @returns The captured stack trace as a string.
  */
 declare function stack_trace(n: number): string;
 
 /**
- * Converts the given value to a byte.
- * This is useful for converting numbers to bytes.
- * @param v The value to convert.
- * @returns The converted byte.
+ * Converts the supplied value to a single byte.
+ * This is useful when working with raw binary data and byte-oriented values.
+ *
+ * @param v - The value to convert.
+ * @returns A byte-sized raw value.
  */
 declare function byte(v: any): raw<byte>;
 
@@ -325,16 +375,24 @@ declare function define_property<T>(
 ): T;
 
 /**
- * Coerces the given value to an object.
- * @returns null if the argument is a macro, a valid object otherwise.
+ * Coerces `v` into an object form when possible.
+ *
+ * Macros are intentionally excluded from this conversion and resolve to `null`.
+ *
+ * @param v - The value to coerce.
+ * @returns An object representation of the value.
  */
 declare function object_cast(v: any): object;
 
 /**
- * Gets the own property descriptor of the specified object.
- * An own property descriptor is one that is defined directly on the object and is not inherited from the object's prototype.
- * @param o Object that contains the property.
- * @param p Name of the property.
+ * Returns the own property descriptor for a property on an object.
+ *
+ * This only inspects properties defined directly on the object, not inherited
+ * ones from the prototype chain.
+ *
+ * @param o - The object to inspect.
+ * @param p - The property name or key to look up.
+ * @returns The property descriptor, or `undefined` when no such property exists.
  */
 declare function get_own_prop_descriptor(
   o: any,
@@ -348,61 +406,119 @@ declare function get_own_prop_descriptor(
  */
 
 /**
- * Creates a new unique symbol.
- * @param description Description of symbol.
+ * Creates a new unique symbol with the given description.
+ *
+ * @param description - A human-readable description for the symbol.
+ * @returns A new unique symbol value.
  */
 declare function new_symbol(description: string): symbol;
 /**
- * Returns a Symbol object from the global symbol registry matching the given key if found.
- * Otherwise, returns a new symbol with this key.
- * @param key — key to search for.
+ * Returns a symbol from the global registry for `key` if one already exists.
+ * Otherwise, it creates and registers a new symbol for that key.
+ *
+ * @param key - The registry key to look up.
+ * @returns The symbol associated with the key.
  */
 declare function symbol_for(key: string): symbol;
 /**
- * Returns a key from the global symbol registry matching the given Symbol if found.
- * Otherwise, returns undefined.
- * @param sym — Symbol to find the key for.
+ * Looks up the key associated with a symbol in the global registry.
+ *
+ * @param sym - The symbol to reverse-lookup.
+ * @returns The registry key, or `undefined` if no matching symbol exists.
  */
 declare function key_for_symbol(sym: symbol): string | undefined;
 
 /**
- * Calls `fn` and returns the result with `this` set to `thisArg`.
- * @param fn
- * @param thisArg
+ * Calls `fn` with `thisArg` bound as the function's `this` value.
+ *
+ * @param fn - The function to call with a bound receiver.
+ * @param thisArg - The value to use as `this` when invoking `fn`.
+ * @returns The result of invoking the bound function.
  */
 declare function bind_this(fn: Function, thisArg: any): any;
 
+/**
+ * Converts an object into an array of `[key, value]` entries.
+ *
+ * @param obj - The source object.
+ * @returns An array of key/value pairs.
+ */
 declare function entries<T, P>(obj: Record<T, P>): [T, P][];
+/**
+ * Creates an object from an array of key/value entries.
+ *
+ * @param obj - The entries to build from.
+ * @returns A newly constructed object.
+ */
 declare function from_entries<T, P>(obj: [T, P][]): Record<T, P>;
 
 /**
- * Returns the elements of the indexable value `v` from `start` to `end`.
- * Negative indices are not allowed.
+ * Returns a slice of an indexable value from `start` to `end`.
+ *
+ * Negative indices are not supported.
+ *
+ * @param v - The indexable value to slice.
+ * @param start - The starting index, inclusive.
+ * @param end - The ending index, exclusive.
+ * @returns A slice of the original value.
  */
 declare function slice<E>(v: Indexable<E>, start: number, end: number): E;
 /**
- * Appends the list of elements to `obj`.
- * The result has the same type as `obj`.
+ * Appends new elements to an indexable value and returns the same kind of value.
+ *
+ * @param obj - The array-like or string-like value to append to.
+ * @param elements - Elements to append.
+ * @returns The updated value.
  */
 declare function append<E>(
   obj: Indexable<E>,
   ...elements: Castable<E>[]
 ): E;
 
+/**
+ * Reports whether `str` contains `sub` as a substring.
+ *
+ * @param str - The source string.
+ * @param sub - The substring to search for.
+ * @returns `true` when `sub` is found, otherwise `false`.
+ */
 declare function string_includes(str: string, sub: string): boolean;
 
+/**
+ * Converts a value into its raw underlying runtime representation.
+ *
+ * @param v - The value to box as a raw value.
+ * @returns The raw representation of `v`.
+ */
 declare function raw_cast(v: any): raw<any>;
 
 /**
- * Retrieves the value in an object's default slot.
+ * Retrieves the value stored in an object's default slot.
  */
 // declare function default(obj: object): any;
 
+/**
+ * Converts a string to uppercase.
+ *
+ * @param str - The input string.
+ * @returns The uppercase version of the string.
+ */
 declare function to_uppercase(str: string): string;
+/**
+ * Converts a string to lowercase.
+ *
+ * @param str - The input string.
+ * @returns The lowercase version of the string.
+ */
 declare function to_lowercase(str: string): string;
 
 /**
- * Append the elements of `t` to `s`.
- * Both must have the same element type.
+ * Appends the elements of `t` to `s`.
+ *
+ * Both values must be arrays or slices with the same element type.
+ *
+ * @param s - The destination array.
+ * @param t - The array of elements to append.
+ * @returns The combined array contents.
  */
 declare function append_array<E>(s: raw<E[]>, t: raw<E[]>): string;
