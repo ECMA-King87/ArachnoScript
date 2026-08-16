@@ -22,19 +22,22 @@ type (
 		elements *lib.Array[Value]
 	}
 	PropertyDescriptor struct {
-		value                                       Value
-		configurable, enumerable, writeable, public bool
-		getter                                      *Function
-		setter                                      *Function
+		value                                              Value
+		configurable, enumerable, writable, public, static bool
+		getter                                             *Function
+		setter                                             *Function
 	}
 	Object struct {
 		hash uintptr
 		// key: comparable values (number | string | symbol), value: any
-		own   *lib.Map[*String, PropertyDescriptor]
-		proto *Object
+		own        *lib.Map[*String, PropertyDescriptor]
+		proto      *Object
+		defaultVal Value
 	}
 	Instance struct {
 		name string
+		// The constructor that instantiated to create this instance.
+		class *Class
 		*Object
 	}
 	Function struct {
@@ -43,6 +46,7 @@ type (
 		async        bool
 		arrow        bool
 		declScope    *Scope
+		this         Value
 		*Object
 		parser.Loc
 	}
@@ -53,8 +57,15 @@ type (
 		macro MacroCallback
 	}
 	Class struct {
-		name string
+		name           string
+		defProp        parser.DefaultProp
+		ctor           *Function
+		props, methods map[int]parser.Member
+		modifiers      [][]parser.TokenTag
+		extends        *Class
 		*Object
+
+		declScope *EvalContext
 	}
 	Symbol struct {
 		description string
@@ -63,18 +74,9 @@ type (
 		*Scope
 		*Object
 	}
-	Pointer struct {
-		ptr int
-		*Scope
-		// ptr lib.Pointer
-	}
-	// RAW[T any] struct {
-	// 	value T
-	// }
 	RAW struct {
 		value any
 	}
-	// RAW any
 )
 
 var (
@@ -255,6 +257,10 @@ func (obj *Object) inspect(d uint, inspector ValueInspector) string {
 	if obj == nil {
 		return NullInspect
 	}
+	s, shouldReturn := checkCustomInspect(obj, inspector)
+	if shouldReturn {
+		return s
+	}
 	if obj.own.Len() == 0 {
 		return "{}"
 	}
@@ -304,6 +310,17 @@ func (obj *Object) inspect(d uint, inspector ValueInspector) string {
 	return b.String()
 }
 
+func checkCustomInspect(obj *Object, inspector ValueInspector) (string, bool) {
+	_, desc, f := lookupProp(obj, toValidPropKey(InspectSymbol), nil)
+	if fn, ok := desc.value.(*Function); f && ok {
+		rtv := inspector.worker.progCtx.execFrame(fn, Args{}, lib.DumbyLoc)
+		if s, ok := rtv.(*String); ok {
+			return s.string, true
+		}
+	}
+	return "", false
+}
+
 func (obj *Object) set(key *String, val Value) {
 	owner, desc, found := lookupProp(obj, key, nil)
 	if found {
@@ -317,9 +334,10 @@ func (obj *Object) set(key *String, val Value) {
 
 func NewObject() *Object {
 	return &Object{
-		hash:  0,
-		own:   lib.NewMap[*String, PropertyDescriptor](),
-		proto: null,
+		hash:       0,
+		own:        lib.NewMap[*String, PropertyDescriptor](),
+		proto:      null,
+		defaultVal: undefined,
 	}
 }
 
@@ -329,27 +347,39 @@ func DefaultPropDesc(value Value) PropertyDescriptor {
 		configurable: true,
 		enumerable:   true,
 		public:       true,
-		writeable:    true,
+		writable:     true,
+		static:       false,
 		getter:       nil,
 		setter:       nil,
 	}
 }
 
 func PropDesc(value Value,
-	configurable, enumerable, writeable, public bool,
+	configurable, enumerable, writeable, public, static bool,
 	getter, setter *Function) PropertyDescriptor {
 	return PropertyDescriptor{
 		value:        value,
 		configurable: configurable,
 		enumerable:   enumerable,
-		writeable:    writeable,
+		writable:     writeable,
 		public:       public,
 		getter:       getter,
 		setter:       setter,
+		static:       static,
 	}
 }
 
 // ############# Instance #############
+
+func NewInstance(class *Class) *Instance {
+	obj := NewObject()
+	obj.proto = NewObject()
+	return &Instance{
+		name:   class.name,
+		class:  class,
+		Object: obj,
+	}
+}
 
 func (inst *Instance) typeof() *String {
 	return InstanceType
@@ -360,10 +390,18 @@ func (inst *Instance) toString() *String {
 }
 
 func (inst *Instance) inspect(d uint, Inspector ValueInspector) string {
+	s, shouldReturn := checkCustomInspect(inst.Object, Inspector)
+	if shouldReturn {
+		return s
+	}
 	return lib.Green(inst.name) + " " + inst.Object.inspect(d, Inspector)
 }
 
 // ############# Symbol #############
+
+func NewSymbol(description string) *Symbol {
+	return &Symbol{description}
+}
 
 func (sym *Symbol) typeof() *String {
 	return SymbolType
@@ -409,6 +447,24 @@ func scopeToObject(so *ScopeObject) *Object {
 
 // ############# Function #############
 
+func NewFunction(name string, body []Node, declLoc parser.Loc, decl parser.FnDecl, declCtx *EvalContext, this Value) *Function {
+	obj := NewObject()
+	obj.proto = NewObject()
+	obj.proto.own.Set(NewString("name"), PropDesc(NewString(name), false, false, false, true, false, nil, nil))
+	fn := &Function{
+		name:      name,
+		body:      body,
+		async:     decl.Async,
+		arrow:     decl.Arrow,
+		Object:    obj,
+		declScope: declCtx.Scope,
+		params:    decl.Params,
+		Loc:       declLoc,
+		this:      this,
+	}
+	return fn
+}
+
 func (fn *Function) typeof() *String {
 	return FunctionType
 }
@@ -422,6 +478,39 @@ func (fn *Function) inspect(d uint, _ ValueInspector) string {
 }
 
 // ############# Class #############
+
+func NewClass(name string, decl parser.ClassDecl, declCtx *EvalContext, loc lib.Loc) *Class {
+	obj := NewObject()
+	obj.proto = NewObject()
+	obj.proto.own.Set(NewString("name"), PropDesc(NewString(name), false, false, false, true, false, nil, nil))
+	classBody := NewContext(NewScope(declCtx.Scope, undefined, ClassScope, 0))
+	var ctorFn *Function
+	if decl.Constructor != nil {
+		var node Node = decl.Constructor
+		decl := node.Data.(parser.FnDecl)
+		name := decl.Name.Data.(string)
+		ctorFn = NewFunction(name, node.Children, node.Loc, decl, classBody, classBody.object)
+	}
+	cl := &Class{
+		name:      name,
+		defProp:   decl.DefProp,
+		ctor:      ctorFn,
+		props:     decl.Props,
+		methods:   decl.Methods,
+		extends:   nil,
+		Object:    obj,
+		modifiers: decl.MemberModifiers,
+		declScope: declCtx,
+	}
+	if decl.Extends != nil {
+		v := declCtx.EvalExpr(decl.Extends)
+		if v.typeof() != ClassType {
+			declCtx.errorWithSource(TypeError, 0, decl.Extends.Loc, "Cannot extend type ", v.typeof().string, ". A class may only extend another class.")
+		}
+		cl.extends = v.(*Class)
+	}
+	return cl
+}
 
 func (class *Class) typeof() *String {
 	return ClassType
@@ -452,6 +541,21 @@ func (m *Macro) inspect(d uint, _ ValueInspector) string {
 }
 
 func (m *Macro) call(args Args, ctx *EvalContext, loc *lib.Loc) Value {
+	defer ctx.callstack.Pop()
+	ctx.callstack.Push(&CallFrame{
+		fn: &Function{
+			name:      m.name,
+			params:    []Node{},
+			body:      []Node{},
+			async:     false,
+			arrow:     false,
+			declScope: globalThis.Scope,
+			Object:    nil,
+			Loc:       *loc,
+		},
+		callEnvPath: ctx.path,
+		callEnvLoc:  *loc,
+	})
 	return m.macro(args, ctx, loc, m)
 }
 
@@ -560,8 +664,8 @@ func (arr *Array) inspect(d uint, Inspector ValueInspector) string {
 	return b.String()
 }
 
-func (arr *Array) push(el Value) Number {
-	arr.elements.Push(el)
+func (arr *Array) push(el ...Value) Number {
+	arr.elements.Push(el...)
 	hashValue(arr)
 	return Number(arr.elements.Len())
 }
@@ -571,26 +675,6 @@ func NewArray() *Array {
 		hash:     0,
 		elements: &lib.Array[Value]{},
 	}
-}
-
-// ###############################################
-// ################### Pointer ###################
-// ###############################################
-
-func (p *Pointer) typeof() *String {
-	return p.value().typeof()
-}
-
-func (p *Pointer) toString() *String {
-	return p.value().toString()
-}
-
-func (p *Pointer) inspect(d uint, Inspector ValueInspector) string {
-	return p.value().inspect(d, Inspector)
-}
-
-func (p *Pointer) value() Value {
-	return p.memory[p.ptr]
 }
 
 // ###############################################
@@ -619,8 +703,6 @@ func MK_RAW(v any) *RAW {
 
 func toInt(v Value) Number {
 	switch v := v.(type) {
-	case *Pointer:
-		return toInt(v.value())
 	case Number:
 		return v
 	case *String:
@@ -643,17 +725,11 @@ func toInt(v Value) Number {
 		}
 	case *Undefined:
 	case *RAW:
-		switch v := v.value.(type) {
-		case []any:
-			return Number(len(v))
-		case map[any]any:
-			return Number(len(v))
-		case chan any:
-			return Number(len(v))
-		case <-chan any:
-			return Number(len(v))
-		case string:
-			return Number(len(v))
+		value := lib.ValueOf(v.value)
+		if lib.IsSlice(value) || lib.IsArray(value) ||
+			lib.IsMap(value) || lib.IsString(value) ||
+			lib.IsChan(value) {
+			return Number(value.Len())
 		}
 	}
 	return 0

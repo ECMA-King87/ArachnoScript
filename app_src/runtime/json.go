@@ -2,10 +2,11 @@ package runtime
 
 import "aspire/are/main/lib"
 
+// jsonValueFromAS does not create any errors for now.
 func jsonValueFromAS(v Value) (obj any, err error) {
 	switch v := v.(type) {
 	case Number:
-		return v, nil
+		return float64(v), nil
 	case *String:
 		return v.string, nil
 	case *Array:
@@ -29,19 +30,19 @@ func jsonValueFromAS(v Value) (obj any, err error) {
 	case *RAW:
 		return v.value, nil
 	}
-	return "{}", err
+	return map[string]any{}, err
 }
 
-func JSONParse(str string) Value {
+func JSONParse(str string) (Value, error) {
 	var v any
 	err := lib.JSONDecode([]byte(str), &v)
 	if err != nil {
-		return NewString("[Invalid JSON: " + err.Error() + "]")
+		return null, err
 	}
-	return ASValueFromJSON(v)
+	return ASValueFromGO(v), nil
 }
 
-func ASValueFromJSON(v any) Value {
+func ASValueFromGO(v any) Value {
 	if v == nil {
 		return null
 	}
@@ -50,18 +51,36 @@ func ASValueFromJSON(v any) Value {
 		return Boolean(v)
 	case string:
 		return NewString(v)
+	case uint:
+		return Number(v)
+	case int:
+		return Number(v)
+	case int8:
+		return Number(v)
+	case uint8:
+		return Number(v)
+	case int16:
+		return Number(v)
+	case uint16:
+		return Number(v)
+	case int32:
+		return Number(v)
+	case int64:
+		return Number(v)
+	case uint64:
+		return Number(v)
 	case float64:
 		return Number(v)
 	case []any:
 		arr := NewArray()
 		for _, el := range v {
-			arr.push(ASValueFromJSON(el))
+			arr.push(ASValueFromGO(el))
 		}
 		return arr
 	case map[string]any:
 		obj := NewObject()
 		for k, p := range v {
-			obj.own.Set(NewString(k), DefaultPropDesc(ASValueFromJSON(p)))
+			obj.own.Set(NewString(k), DefaultPropDesc(ASValueFromGO(p)))
 		}
 		return obj
 	}

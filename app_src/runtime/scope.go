@@ -15,13 +15,16 @@ const (
 	VarDecl
 )
 
+type ScopeKind lib.Enum
+
 const (
-	FunctionScope lib.Enum = iota
-	TryCatchScope
+	FunctionScope ScopeKind = iota
+	TryScope
 	GlobalScope
 	ModuleScope
 	SwitchScope
 	BlockScope
+	ClassScope
 	LoopScope
 )
 
@@ -33,15 +36,14 @@ type Scope struct {
 	parent            *Scope
 	worker            *Worker
 	valid, in_promise bool
-	of                lib.Enum
+	of                ScopeKind
 
 	// the scope must carry a path
-	path       int
-	objectHash uintptr
-	// object Value
+	path   int
+	object Value
 }
 
-func NewScope(parent *Scope, object uintptr, of lib.Enum, path int) *Scope {
+func NewScope(parent *Scope, object Value, of ScopeKind, path int) *Scope {
 	var worker *Worker
 	if parent != nil {
 		if path == 0 {
@@ -51,7 +53,7 @@ func NewScope(parent *Scope, object uintptr, of lib.Enum, path int) *Scope {
 	} else if path == 0 {
 		path = -1
 	}
-	return &Scope{
+	scope := &Scope{
 		memory:     []Value{},
 		names:      lib.NewMap[*String, int](),
 		varTypes:   lib.NewMap[*String, DeclType](),
@@ -61,12 +63,14 @@ func NewScope(parent *Scope, object uintptr, of lib.Enum, path int) *Scope {
 		worker:     worker,
 		of:         of,
 		path:       path,
-		objectHash: object,
+		object:     object,
 	}
+	scope.init(ThisStr, object, ConstDecl, lib.DumbyLoc)
+	return scope
 }
 
-func NewFunctionScope(function *Function, this *Object) *Scope {
-	return NewScope(function.declScope, hashValue(this), FunctionScope, 0)
+func NewFunctionScope(function *Function, this Value) *Scope {
+	return NewScope(function.declScope, this, FunctionScope, 0)
 }
 
 func (s *Scope) declare(name *String, varType DeclType, loc parser.Loc) int {
@@ -82,14 +86,14 @@ func (s *Scope) declare(name *String, varType DeclType, loc parser.Loc) int {
 
 func (s *Scope) init(name *String, value Value, varType DeclType, loc parser.Loc) Value {
 	if s.path == 0 && s.of != GlobalScope {
-		s.error(BuildError, "Scope path is uninitialized: "+name.string)
+		s.raise(BuildError, "Scope path is uninitialized: "+name.string)
 	}
 	if s.names.Has(name) {
 		s.errorWithSource(SyntaxError, 0, loc, lib.Sprintf("Cannot redeclare variable '%s'.", name.string))
 	}
 	ptr := len(s.memory)
-	s.names.Set(name, ptr)
 	s.memory = append(s.memory, value)
+	s.names.Set(name, ptr)
 	s.varTypes.Set(name, varType)
 	return value
 }
@@ -97,12 +101,12 @@ func (s *Scope) init(name *String, value Value, varType DeclType, loc parser.Loc
 func (s *Scope) getValue(name *String, loc *parser.Loc) Value {
 	scope := s.resolve(name, s, loc)
 	ptr, _ := scope.names.Get(name)
-	if ptr == -1 {
-		s.errorWithSource(SyntaxError, 0, *loc, "Variable '", name.string, "' used before being initialized.")
+	if ptr < 0 {
+		s.errorWithSource(SyntaxError, 0, *loc, lib.Sprintf("Variable '%s' used before being initialized.", name.string))
 	}
-	if ptr < 0 || ptr >= len(scope.memory) {
+	if ptr >= len(scope.memory) {
 		if lib.DEBUG_MODE {
-			s.errorWithSource(BuildError, 0, *loc, "Invalid memory access: index out of bounds for variable '", name.string, "'.")
+			s.errorWithSource(BuildError, 0, *loc, lib.Sprintf("Invalid memory access: index out of bounds for variable '%s'.", name.string))
 		}
 		return undefined
 	}
@@ -114,26 +118,27 @@ func (s *Scope) resolve(name *String, oscope *Scope, loc *parser.Loc) *Scope {
 		return s
 	}
 	if s.parent == nil {
-		oscope.errorWithSource(ReferenceError, 0, *loc, "Could not resolve name \x1b[32m", name.string, "\x1b[0m, it does not exist.")
+		oscope.errorWithSource(ReferenceError, 0, *loc, lib.Sprintf("Could not resolve name \x1b[32m%s\x1b[0m, it does not exist.", name.string))
 	}
 	return s.parent.resolve(name, oscope, loc)
 }
 
-func (s *Scope) findScopeWith(u uintptr) *Scope {
-	if s.objectHash == u {
+func (s *Scope) findScopeWith(v Value) *Scope {
+	// Compare Identity, most values are pointers.
+	if s.object == v {
 		return s
 	}
 	if s.parent == nil {
 		return nil
 	}
-	return s.parent.findScopeWith(u)
+	return s.parent.findScopeWith(v)
 }
 
-func (s *Scope) scopeOf(t lib.Enum) *Scope {
+func (s *Scope) scopeOf(t ScopeKind) *Scope {
 	if s.of == t {
 		return s
 	}
-	if s.parent == nil {
+	if s.parent == nil || (s.of == FunctionScope && s.parent.of != ClassScope) {
 		return nil
 	}
 	return s.parent.scopeOf(t)
@@ -155,12 +160,7 @@ func (s *Scope) assignName(name *String, value Value, loc *parser.Loc) {
 // Assigns the value to ptr to value in the memory of s.
 func (s *Scope) assign(ptr int, value Value) {
 	if ptr < 0 || ptr >= len(s.memory) {
-		s.error(BuildError, "Invalid memory pointer: index out of bounds")
-	}
-	if p, ok := s.memory[ptr].(*Pointer); ok {
-		if p.Scope != nil && p.Scope != s {
-			p.assign(p.ptr, value)
-		}
+		s.raise(BuildError, "Invalid memory pointer: index out of bounds")
 	}
 	s.memory[ptr] = value
 }
@@ -171,23 +171,98 @@ const (
 	ReferenceError ErrorName = iota
 	SyntaxError
 	BuildError
+	RangeError
 	TypeError
 	MathError
 	Error
 )
 
-// path can be negative to use the s's path.
+// path may be zero to use the scope's own path.
 func (s *Scope) errorWithSource(name ErrorName, path int, loc parser.Loc, args ...string) {
 	if path == 0 {
 		path = s.path
 	}
-	args = append(args, lib.EOL, lib.DebugMsg(path, loc))
-	s.error(name, args...)
+	b := lib.NewStringBuilder()
+	for _, m := range args {
+		b.WriteString(m)
+	}
+	s.error(name, path, loc, NewString(b.String()))
 }
 
-// NOTE: Adds a newline at the end
-func (s *Scope) error(name ErrorName, msg ...string) {
+// path may be zero to use the scope's own path.
+func (s *Scope) raiseWithTrace(name ErrorName, path int, loc parser.Loc, args ...string) {
+	if path == 0 {
+		path = s.path
+	}
 	b := lib.NewStringBuilder()
+	for _, m := range args {
+		b.WriteString(m)
+	}
+	s.errorWithTrace(name, path, loc, NewString(b.String()))
+}
+
+// Does not infer path. 0 means no source.
+func (s *Scope) error(name ErrorName, path int, loc parser.Loc, value Value) {
+	if s != nil {
+		s.invalidate()
+		if s.of == ModuleScope || s.parent == nil {
+			b := lib.NewStringBuilder()
+			errName := resolveErrName(name)
+			inPromise := ""
+			if s.in_promise {
+				inPromise = "(in promise) "
+			}
+			b.WriteString(lib.Sprintf("Uncaught %s\x1b[31m%s\x1b[0m: ", inPromise, errName))
+			b.WriteString(s.worker.Inspect(value))
+			if path != 0 {
+				b.WriteString(lib.EOL)
+				b.WriteString(lib.DebugMsg(path, loc))
+			}
+			b.WriteString(lib.EOL)
+			lib.Stdout.WriteString(b.String())
+			s.worker.crash()
+		} else if s.of == TryScope {
+			s.invalidate()
+			s.worker.stack.Push(value)
+		} else {
+			s.parent.error(name, path, loc, value)
+		}
+	}
+}
+
+// Does not infer path. 0 means no source.
+func (s *Scope) errorWithTrace(name ErrorName, path int, loc parser.Loc, value Value) {
+	if s != nil {
+		s.invalidate()
+		if s.of == ModuleScope || s.parent == nil {
+			b := lib.NewStringBuilder()
+			errName := resolveErrName(name)
+			inPromise := ""
+			if s.in_promise {
+				inPromise = "(in promise) "
+			}
+			b.WriteString(lib.Sprintf("Uncaught %s\x1b[31m%s\x1b[0m: ", inPromise, errName))
+			b.WriteString(s.worker.Inspect(value))
+			b.WriteString(lib.EOL)
+			ctx := NewContext(s)
+			if ctx.callstack.Len() > 0 {
+				b.WriteString(newStackTrace(10, ctx).string)
+			} else if path != 0 {
+				b.WriteString(lib.DebugMsg(path, loc))
+			}
+			// b.WriteString(lib.EOL)
+			lib.Stdout.WriteString(b.String())
+			s.worker.crash()
+		} else if s.of == TryScope {
+			s.invalidate()
+			s.worker.stack.Push(value)
+		} else {
+			s.parent.errorWithTrace(name, path, loc, value)
+		}
+	}
+}
+
+func resolveErrName(name ErrorName) string {
 	errName := ""
 	switch name {
 	case ReferenceError:
@@ -200,9 +275,20 @@ func (s *Scope) error(name ErrorName, msg ...string) {
 		errName = "BuildError"
 	case MathError:
 		errName = "MathError"
+	case RangeError:
+		errName = "RangeError"
 	default:
 		errName = "Error"
 	}
+	return errName
+}
+
+// NOTE: Adds a newline at the end
+// Does not support error handling.
+// Used for certain errors like BuildErrors.
+func (s *Scope) raise(name ErrorName, msg ...string) {
+	b := lib.NewStringBuilder()
+	errName := resolveErrName(name)
 	inPromise := ""
 	if s.in_promise {
 		inPromise = "(in promise) "
@@ -219,6 +305,9 @@ func (s *Scope) throw(builder *strings.Builder) {
 	if s.of == ModuleScope || s.parent == nil {
 		lib.Stdout.WriteString(builder.String())
 		s.worker.crash()
+		// } else if s.of == TryScope {
+		// 	s.invalidate()
+		// 	s.worker.stack.Push(NewString(builder.String()))
 	} else {
 		s.invalidate()
 		s.parent.throw(builder)

@@ -1,3 +1,4 @@
+//@ts-nocheck arachnoscript
 const E = 2.71828182845904523536028747135266249775724709369995957496696763;
 const PI = 3.14159265358979323846264338327950288419716939937510582097494459;
 const PHI = 1.61803398874989484820458683436563811772030917980576286213544862;
@@ -37,7 +38,7 @@ globalThis.Math = {
     while (idx < len) {
       const v = values[idx];
       if (typeof v != "number") {
-        throw "Math.max: encountered non-numerical value in arguments.";
+        throw new Error("Math.max: encountered non-numerical value in arguments.");
       }
       if (v > maxN) maxN = v;
       idx++;
@@ -46,12 +47,12 @@ globalThis.Math = {
   },
 
   abs(x) {
-    if (typeof x != "number") throw "Math.abs: argument must be a number.";
+    if (typeof x != "number") throw new Error("Math.abs: argument must be a number.");
     return #_abs(x);
   },
 
   trunc(x) {
-    if (typeof x != "number") throw "Math.trunc: argument must be a number.";
+    if (typeof x != "number") throw new Error("Math.trunc: argument must be a number.");
     return #_trunc_num(x);
   },
 };

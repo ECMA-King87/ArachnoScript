@@ -14,19 +14,7 @@ var PDB = lib.NewPDB("src")
 func (ctx *EvalContext) evalFnStmt(node Node) *Function {
 	decl := node.Data.(parser.FnDecl)
 	name := decl.Name.Data.(string)
-	obj := NewObject()
-	obj.proto = NewObject()
-	obj.proto.own.Set(NewString("name"), PropDesc(NewString(string(name)), false, false, false, true, nil, nil))
-	fn := &Function{
-		name:      string(name),
-		body:      node.Children,
-		async:     decl.Async,
-		arrow:     decl.Arrow,
-		Object:    obj,
-		declScope: ctx.Scope,
-		params:    decl.Params,
-		Loc:       node.Loc,
-	}
+	fn := NewFunction(name, node.Children, node.Loc, decl, ctx, NewObject())
 	ctx.init(NewString(fn.name), fn, ConstDecl, node.Loc)
 	return fn
 }
@@ -34,7 +22,11 @@ func (ctx *EvalContext) evalFnStmt(node Node) *Function {
 func (ctx *EvalContext) evalVarDecl(node Node) *Undefined {
 	stmt := node.Data.(parser.VarDecl)
 	for _, decl := range stmt.Decls {
-		ctx.declareName(decl, DeclType(stmt.Kind))
+		var value Value = undefined
+		if decl.Rhs != nil {
+			value = ctx.EvalExpr(decl.Rhs)
+		}
+		ctx.declareName(decl.Lhs, value, decl.Lhs.Loc, DeclType(stmt.Kind))
 	}
 	return undefined
 }
@@ -42,20 +34,17 @@ func (ctx *EvalContext) evalVarDecl(node Node) *Undefined {
 func (ctx *EvalContext) evalIfStmt(node Node) *Undefined {
 	stmt := node.Data.(parser.IfStmt)
 	condNode := stmt.Condition
-	var condition Boolean = false
-	blockCtx := NewContext(NewScope(ctx.Scope, ctx.objectHash, BlockScope, 0))
-	switch condNode.Tag {
-	case parser.T_VARDECL:
-		decl := condNode.Data.(parser.VarDecl)
+	blockCtx := NewContext(NewScope(ctx.Scope, ctx.object, BlockScope, 0))
+	if condNode.Decl != nil {
+		decl := condNode.Decl.Data.(parser.VarDecl)
 		d := decl.Decls[0]
-		condition = valueIsTruthy(ctx.declareName(d, DeclType(decl.Kind)))
-	default:
-		condition = valueIsTruthy(ctx.EvalExpr(condNode))
+		blockCtx.declareName(d.Lhs, ctx.EvalExpr(d.Rhs), d.Rhs.Loc, DeclType(decl.Kind))
 	}
+	condition := valueIsTruthy(blockCtx.EvalExpr(condNode.Node))
 	ifBlock := node.Children
 	if condition {
 		blockCtx.ExecBlock(ifBlock)
-	} else {
+	} else if len(stmt.ElseBlock) > 0 {
 		blockCtx.ExecBlock(stmt.ElseBlock)
 	}
 	blockCtx.invalidate()
@@ -66,41 +55,32 @@ func (ctx *EvalContext) evalWhileStmt(node Node) *Undefined {
 	stmt := node.Data.(parser.WhileLoop)
 	condNode := stmt.Condition
 	body := stmt.Body
-	var condition Boolean = false
-	var d parser.Decl
-
 	for {
-		blockCtx := NewContext(NewScope(ctx.Scope, ctx.objectHash, LoopScope, 0))
+		blockCtx := NewContext(NewScope(ctx.Scope, ctx.object, LoopScope, 0))
 		if stmt.Do {
 			_, _, br := blockCtx.ExecBlock(body)
 			if br {
 				break
 			}
-			switch condNode.Tag {
-			case parser.T_VARDECL:
-				decl := condNode.Data.(parser.VarDecl)
-				d = decl.Decls[0]
-				condition = valueIsTruthy(blockCtx.declareName(d, DeclType(decl.Kind)))
-				condNode = d.Rhs
-			default:
-				condition = valueIsTruthy(ctx.EvalExpr(condNode))
+			if condNode.Decl != nil {
+				decl := condNode.Decl.Data.(parser.VarDecl)
+				d := decl.Decls[0]
+				blockCtx.declareName(d.Lhs, ctx.EvalExpr(d.Rhs), d.Rhs.Loc, DeclType(decl.Kind))
 			}
+			condition := valueIsTruthy(blockCtx.EvalExpr(condNode.Node))
 			if !condition {
 				break
 			}
 		} else {
-			switch condNode.Tag {
-			case parser.T_VARDECL:
-				decl := condNode.Data.(parser.VarDecl)
-				d = decl.Decls[0]
-				condition = valueIsTruthy(blockCtx.declareName(d, DeclType(decl.Kind)))
-				condNode = d.Rhs
-			default:
-				condition = valueIsTruthy(ctx.EvalExpr(condNode))
+			if condNode.Decl != nil {
+				decl := condNode.Decl.Data.(parser.VarDecl)
+				d := decl.Decls[0]
+				blockCtx.declareName(d.Lhs, ctx.EvalExpr(d.Rhs), d.Rhs.Loc, DeclType(decl.Kind))
 			}
+			condition := valueIsTruthy(blockCtx.EvalExpr(condNode.Node))
 			if condition {
-				blockCtx.ExecBlock(body)
-				if !blockCtx.valid {
+				_, _, br := blockCtx.ExecBlock(body)
+				if br || !blockCtx.valid {
 					break
 				}
 			} else {
@@ -126,13 +106,16 @@ func (ctx *EvalContext) evalContinueStmt(node Node) *Undefined {
 		ctx.errorWithSource(SyntaxError, ctx.path, node.Loc, "A 'continue' statement can only be used within an enclosing iteration or switch statement.")
 	}
 	ctx.terminate = true
-	// ctx._continue = true
+	ctx._continue = true
 	return undefined
 }
 
 func (ctx *EvalContext) evalReturnStmt(node Node) *Undefined {
+	if ctx.scopeOf(FunctionScope) == nil {
+		ctx.errorWithSource(SyntaxError, 0, node.Loc, "A 'return' statement can only be used within a function body.")
+	}
 	expr := node.Children[0]
-	if expr.Tag != parser.T_INVALID {
+	if expr != nil {
 		ctx.stack.Push(ctx.EvalExpr(expr))
 	} else {
 		ctx.stack.Push(undefined)
@@ -144,12 +127,12 @@ func (ctx *EvalContext) evalReturnStmt(node Node) *Undefined {
 
 func (ctx *EvalContext) evalThrowStmt(node Node) *Undefined {
 	expr := node.Children[0]
-	ctx.error(Error, ctx.EvalExpr(expr).toString().string)
+	ctx.error(Error, 0, lib.DumbyLoc, ctx.EvalExpr(expr))
 	return undefined
 }
 
 func (ctx *EvalContext) evalBlockStmt(node Node) Value {
-	blockCtx := NewContext(NewScope(ctx.Scope, UndefinedHash, BlockScope, 0))
+	blockCtx := NewContext(NewScope(ctx.Scope, undefined, BlockScope, 0))
 	blockCtx.ExecBlock(node.Children)
 	blockCtx.invalidate()
 	return undefined
@@ -158,23 +141,34 @@ func (ctx *EvalContext) evalBlockStmt(node Node) Value {
 func (ctx *EvalContext) evalSwitchStmt(node Node) Value {
 	stmt := node.Data.(parser.SwitchStmt)
 	cond := stmt.Condition
-	blockCtx := NewContext(NewScope(ctx.Scope, UndefinedHash, SwitchScope, 0))
+	blockCtx := NewContext(NewScope(ctx.Scope, undefined, SwitchScope, 0))
 	// Use blockCtx and EvalStmt for the case of var decls.
-	condValue := blockCtx.EvalStmt(cond)
+	var condValue Value
+	if cond.Tag == parser.T_VARDECL {
+		vardecl := cond.Data.(parser.VarDecl)
+		decl := vardecl.Decls[0]
+		condValue = blockCtx.EvalStmt(decl.Rhs)
+		ctx.declareName(decl.Lhs, condValue, decl.Rhs.Loc, DeclType(vardecl.Kind))
+	} else {
+		condValue = blockCtx.EvalStmt(cond)
+	}
 	noMatch := true
-	for i, match := range stmt.Matches {
-		if compareVals(condValue, blockCtx.EvalExpr(match), CMP_EQUALS) {
-			noMatch = false
-			t, c, b := blockCtx.ExecBlock(stmt.Cases[i])
-			blockCtx.invalidate()
-			if t && c && b {
-				// fallthrough
-				if i+1 >= len(stmt.Matches) {
-					ctx.errorWithSource(SyntaxError, 0, node.Loc, "Cannot fallthrough final case in switch.")
+switch_:
+	for i, matches := range stmt.Matches {
+		for _, match := range matches {
+			if compareVals(condValue, blockCtx.EvalExpr(match), CMP_EQUALS) {
+				noMatch = false
+				t, c, b := blockCtx.ExecBlock(stmt.Cases[i])
+				blockCtx.invalidate()
+				if t && c && b {
+					// fallthrough
+					if i+1 >= len(stmt.Matches) {
+						ctx.errorWithSource(SyntaxError, 0, node.Loc, "Cannot fallthrough final case in switch.")
+					}
+					continue
 				}
-				continue
+				break switch_
 			}
-			break
 		}
 	}
 	if noMatch && len(stmt.Default) > 0 {
@@ -184,10 +178,93 @@ func (ctx *EvalContext) evalSwitchStmt(node Node) Value {
 	return undefined
 }
 
-func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
-	left := decl.Lhs
-	right := decl.Rhs
+func (ctx *EvalContext) evalClassDecl(node Node) Value {
+	decl := node.Data.(parser.ClassDecl)
+	name := decl.Name
+	if decl.Anonymous {
+		name = parser.AnonymousName
+	}
+	cl := NewClass(name, decl, ctx, node.Loc)
+	if decl.Anonymous {
+		return cl
+	}
+	return ctx.init(NewString(name), cl, ConstDecl, node.Loc)
+}
+
+func (ctx *EvalContext) evalTryCatchFinally(node Node) Value {
+	stmt := node.Data.(parser.TryCatch)
+	tryBlock := stmt.Try
+	tryCtx := NewContext(NewScope(ctx.Scope, ctx.object, TryScope, 0))
+	tryCtx.ExecBlock(tryBlock)
+	catchBlock := stmt.Catch
+	if !tryCtx.valid && catchBlock != nil && !tryCtx.returned {
+		capture := stmt.Capture
+		catchCtx := NewContext(NewScope(ctx.Scope, ctx.object, BlockScope, 0))
+		arg := tryCtx.stack.Pop()
+		catchCtx.declareParam(capture, arg, 0, Args{arg})
+		catchCtx.ExecBlock(catchBlock)
+	}
+	finally := stmt.Finally
+	if finally != nil {
+		finallyCtx := NewContext(NewScope(ctx.Scope, ctx.object, BlockScope, 0))
+		finallyCtx.ExecBlock(finally)
+	}
+	return undefined
+}
+
+func (ctx *EvalContext) evalForLoop(node Node) Value {
+	stmt := node.Data.(parser.ForLoop)
+	left := stmt.LHS
+	right := stmt.RHS
+	op := stmt.Op
 	val := ctx.EvalExpr(right)
+	enum := []Value{}
+	switch op {
+	case parser.In_Op:
+		switch v := val.(type) {
+		case *Array:
+			for i := range v.elements.Len() {
+				enum = append(enum, Number(i))
+			}
+		default:
+			cast := valToObjectCast(v)
+			if v == undefined || v == null || cast == null {
+				ctx.errorWithSource(TypeError, 0, right.Loc, "Cannot iterate over value, it is not iterable.")
+			}
+			cast.own.ForEach(func(key *String, _ PropertyDescriptor, _ bool) {
+				enum = append(enum, key)
+			})
+		}
+	case parser.Of_Op:
+		switch v := val.(type) {
+		case *Array:
+			v.elements.ForEach(func(_ int, v Value) {
+				enum = append(enum, v)
+			})
+		default:
+			cast := valToObjectCast(v)
+			if v == undefined || v == null || cast == null {
+				ctx.errorWithSource(TypeError, 0, right.Loc, "Cannot iterate over value, it is not iterable.")
+			}
+			cast.own.ForEach(func(k *String, _ PropertyDescriptor, _ bool) {
+				enum = append(enum, ctx.getMember(cast, k))
+			})
+		}
+	}
+	for _, e := range enum {
+		body := node.Children
+		evalCtx := NewContext(NewScope(ctx.Scope, ctx.object, LoopScope, 0))
+		evalCtx.declareName(left, e, right.Loc, DeclType(stmt.DeclKind))
+		_, _, b := evalCtx.ExecBlock(body)
+		evalCtx.invalidate()
+		if b {
+			break
+		}
+	}
+	return undefined
+}
+
+func (ctx *EvalContext) declareName(left Node, val Value, rightLoc parser.Loc, varType DeclType) Value {
 	switch left.Tag {
 	case parser.T_IDENT:
 		name := NewString(string(left.Data.(parser.Identifier)))
@@ -195,7 +272,7 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 	case parser.T_ARRAY_LIT:
 		names := left.Children
 		if val.typeof() != ArrayType {
-			ctx.errorWithSource(TypeError, ctx.path, right.Loc, "Cannot array destructure type ", val.typeof().string, ".")
+			ctx.errorWithSource(TypeError, ctx.path, rightLoc, "Cannot array destructure type ", val.typeof().string, ".")
 		}
 		arr := val.(*Array)
 		for i, name := range names {
@@ -223,20 +300,14 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 		}
 	case parser.T_OBJECT_LIT:
 		if val.typeof() != ObjectType {
-			ctx.errorWithSource(TypeError, ctx.path, right.Loc, "Cannot object destructure type ", val.typeof().string, ".")
+			ctx.errorWithSource(TypeError, ctx.path, rightLoc, "Cannot object destructure type ", val.typeof().string, ".")
 		}
 		dest := left.Data.(parser.ObjectDest)
 		props := dest.Props
 		for idx, key := range dest.Keys {
 			prop := props[idx]
-			var keyVal *String
+			keyVal, name := ctx.evalDestKey(prop, key)
 			var value Value
-			name := NewString(string(prop.Data.(parser.Identifier)))
-			if prop.Computed {
-				keyVal = ctx.EvalExpr(key).toString()
-			} else {
-				keyVal = name
-			}
 			obj := val.(*Object)
 			value = lookupMember(obj, keyVal, nil)
 			def := prop.Default
@@ -251,13 +322,33 @@ func (ctx *EvalContext) declareName(decl parser.Decl, varType DeclType) Value {
 	return val
 }
 
+func (ctx *EvalContext) evalMemberKey(isComputed bool, key *parser.Node) (propKey *String) {
+	if isComputed {
+		keyValue := ctx.EvalExpr(key)
+		propKey = NewString(keyValue.toString().string)
+	} else {
+		propKey = NewString(string(key.Data.(parser.Identifier)))
+	}
+	return
+}
+
+func (ctx *EvalContext) evalDestKey(prop parser.ObjectDestProp, key *parser.Node) (keyVal *String, name *String) {
+	name = NewString(string(prop.Data.(parser.Identifier)))
+	if prop.Computed {
+		keyVal = ctx.EvalExpr(key).toString()
+	} else {
+		keyVal = name
+	}
+	return
+}
+
 func lookupProp(obj *Object, keyVal *String, seen map[uintptr]bool) (owner *Object, desc PropertyDescriptor, found bool) {
 	if seen == nil {
 		seen = make(map[uintptr]bool, 8)
 	}
 	h := getValueHash(obj)
 	if seen[h] {
-		return nil, DefaultPropDesc(undefined), false // cycle detected
+		return null, DefaultPropDesc(undefined), false // cycle detected
 	}
 	seen[h] = true
 	defer delete(seen, h) // backtrack
@@ -271,19 +362,32 @@ func lookupProp(obj *Object, keyVal *String, seen map[uintptr]bool) (owner *Obje
 	return null, DefaultPropDesc(undefined), false
 }
 
-func (ctx *EvalContext) getMember(obj *Object, keyVal *String) Value {
-	this, desc, found := lookupProp(obj, keyVal, nil)
+func (ctx *EvalContext) getMember(v Value, keyVal *String) Value {
+	var object *Object
+	switch o := v.(type) {
+	case *Instance:
+		object = o.Object
+	case *Class:
+		object = o.Object
+	case *Function:
+		object = o.Object
+	case *Object:
+		object = o
+	case *ScopeObject:
+		object = scopeToObject(o)
+	default:
+		// Ignore other types
+		return undefined
+	}
+	_, desc, found := lookupProp(object, keyVal, nil)
 	if !found {
 		return undefined
 	}
-	if !desc.public && ctx.findScopeWith(getValueHash(obj)) == nil {
+	if !desc.public && ctx.findScopeWith(v) == nil {
 		return undefined
 	}
 	if desc.getter != nil {
-		fnCtx := NewContext(NewFunctionScope(desc.getter, this))
-		ctx.declareParams(desc.getter, []Node{}, Args{}, fnCtx)
-		fnCtx.init(ThisStr, this, ConstDecl, desc.getter.Loc)
-		return ctx.execFrame(desc.getter, fnCtx, desc.getter.Loc)
+		return ctx.execFrame(desc.getter, Args{}, desc.getter.Loc)
 	} else if desc.setter != nil {
 		// set-only value
 		return undefined
@@ -291,26 +395,26 @@ func (ctx *EvalContext) getMember(obj *Object, keyVal *String) Value {
 	return desc.value
 }
 
-func (ctx *EvalContext) setMember(obj *Object, keyVal *String, value Value, scope *Scope, loc parser.Loc) Value {
-	this, desc, found := lookupProp(obj, keyVal, nil)
+// v is the object we're considering
+// v != obj when obj == v.(Instance|Class|Funtion).Object
+func (ctx *EvalContext) setMember(obj *Object, v Value, keyVal *String, value Value, loc parser.Loc) Value {
+	owner, desc, found := lookupProp(obj, keyVal, nil)
 	if !found {
 		obj.own.Set(keyVal, DefaultPropDesc(value))
 		return value
 	}
+	canSet := ctx.findScopeWith(v) != nil
+	if !desc.public && !canSet {
+		ctx.errorWithSource(SyntaxError, ctx.path, loc, lib.Sprintf("Cannot assign to '%s' because it is not an exposed property.", keyVal.toString().string))
+	}
 	if desc.setter != nil {
-		fnCtx := NewContext(NewFunctionScope(desc.setter, this))
-		ctx.declareParams(desc.setter, []Node{}, Args{value}, fnCtx)
-		fnCtx.init(ThisStr, this, ConstDecl, desc.setter.Loc)
-		ctx.execFrame(desc.setter, fnCtx, loc)
+		ctx.execFrame(desc.setter, Args{value}, loc)
+		return value
 	}
-	if desc.getter != nil || !desc.writeable {
-		scope.errorWithSource(SyntaxError, scope.path, loc, "Cannot assign to '%s' because it is a read-only property.", keyVal.toString().string)
+	if desc.getter != nil || !desc.writable {
+		ctx.errorWithSource(SyntaxError, ctx.path, loc, lib.Sprintf("Cannot assign to '%s' because it is a read-only property.", keyVal.toString().string))
 	}
-	if desc.public || scope.findScopeWith(getValueHash(obj)) != nil {
-		obj.own.Set(keyVal, PropDesc(value, desc.configurable, desc.enumerable, desc.writeable, desc.public, desc.getter, desc.setter))
-	} else {
-		scope.errorWithSource(SyntaxError, scope.path, loc, "Cannot assign to '%s' because it is not an exposed property.", keyVal.toString().string)
-	}
+	owner.own.Set(keyVal, PropDesc(value, desc.configurable, desc.enumerable, desc.writable, desc.public, false, desc.getter, desc.setter))
 	return value
 }
 
@@ -342,7 +446,7 @@ func (*EvalContext) evalNumber(n float64) Number {
 }
 
 func (*EvalContext) evalString(str string) *String {
-	return NewString(lib.Unquote(str))
+	return NewString(lib.Unquote(lib.Sprintf("\"%s\"", str)))
 }
 
 func (ctx *EvalContext) evalUnaryExpr(node Node) Number {
@@ -368,16 +472,16 @@ func (ctx *EvalContext) evalBinaryExpr(node Node) Value {
 	a := ctx.EvalExpr(left)
 	b := ctx.EvalExpr(right)
 	typeofA := a.typeof()
-	typeofB := a.typeof()
+	typeofB := b.typeof()
 	if typeofA == StringType || typeofB == StringType {
-		return NewString(a.(*String).string + b.(*String).string)
+		return NewString(a.toString().string + b.toString().string)
 	}
 	const err = "The operands of an arithmetic operator must be of type number."
 	if typeofA != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, left.Loc, err)
 	}
 	if typeofB != NumberType {
-		ctx.errorWithSource(TypeError, ctx.path, left.Loc, err)
+		ctx.errorWithSource(TypeError, ctx.path, right.Loc, err)
 	}
 	return ctx.evalBinaryOp(a.(Number), b.(Number), expr.Op, node.Loc)
 }
@@ -415,7 +519,7 @@ func (ctx *EvalContext) evalBitwiseBinaryExpr(node Node) Value {
 	if a.typeof() != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, expr.Lhs.Loc, err)
 	}
-	if a.typeof() != NumberType {
+	if b.typeof() != NumberType {
 		ctx.errorWithSource(TypeError, ctx.path, expr.Rhs.Loc, err)
 	}
 	return ctx.evalBitwiseOp(node.Tag, a.(Number), b.(Number))
@@ -438,7 +542,7 @@ func (ctx *EvalContext) evalBitwiseOp(tag parser.NodeTag, a, b Number) Value {
 	case parser.T_XOR:
 		return Number(float64(int64(a) ^ int64(b)))
 	default:
-		ctx.error(BuildError, "Unhandled bitwise op: ", tag.Name())
+		ctx.raise(BuildError, "Unhandled bitwise op: ", tag.Name())
 	}
 	return null
 }
@@ -539,14 +643,8 @@ func (ctx *EvalContext) evalObjectLit(node Node) *Object {
 	object := NewObject()
 	expr := node.Data.(parser.ObjectLiteral)
 	for idx, key := range expr.Keys {
-		var propKey *String
 		prop := expr.Props[idx]
-		if key.Tag == parser.T_IDENT && !prop.Computed {
-			propKey = NewString(string(key.Data.(parser.Identifier)))
-		} else {
-			keyValue := ctx.EvalExpr(key)
-			propKey = NewString(keyValue.toString().string)
-		}
+		propKey := ctx.evalMemberKey(prop.Computed, key)
 		switch prop.Tag {
 		case parser.T_FNDECL:
 			decl := prop.Data.(parser.FnDecl)
@@ -565,7 +663,7 @@ func (ctx *EvalContext) evalObjectLit(node Node) *Object {
 				prop.Data = parser.ClassDecl{
 					Name:        propKey.toString().string,
 					Anonymous:   decl.Anonymous,
-					DefaultProp: decl.DefaultProp,
+					DefProp:     decl.DefProp,
 					Methods:     decl.Methods,
 					Props:       decl.Props,
 					Constructor: decl.Constructor,
@@ -587,7 +685,7 @@ func (ctx *EvalContext) evalObjectLit(node Node) *Object {
 			} else {
 				setter = fn
 			}
-			object.own.Set(propKey, PropDesc(undefined, true, true, false, true, getter, setter))
+			object.own.Set(propKey, PropDesc(undefined, true, true, false, true, false, getter, setter))
 		} else {
 			value := ctx.EvalExpr(prop.Node)
 			object.own.Set(propKey, DefaultPropDesc(value))
@@ -618,28 +716,22 @@ func (ctx *EvalContext) evalFnExpr(node Node) *Function {
 	if decl.Name.Tag == parser.T_IDENT {
 		name = string(decl.Name.Data.(parser.Identifier))
 	}
-	obj := NewObject()
-	obj.proto = NewObject()
-	obj.proto.own.Set(NewString("name"), PropDesc(NewString(name), false, false, false, true, nil, nil))
-	fn := &Function{
-		name:      name,
-		body:      node.Children,
-		async:     decl.Async,
-		arrow:     decl.Arrow,
-		Object:    obj,
-		declScope: ctx.Scope,
-		params:    decl.Params,
-		Loc:       node.Loc,
+	var this Value
+	if decl.Arrow {
+		this = ctx.object
+	} else {
+		this = NewObject()
 	}
+	fn := NewFunction(name, node.Children, node.Loc, decl, ctx, this)
 	return fn
 }
 
 func (ctx *EvalContext) evalCallExpr(node Node) Value {
 	expr := node.Data.(parser.CallExpr)
 	caller := expr.Caller
-	callerVal := ctx.EvalExpr(caller)
 	args := ctx.evalArgs(expr.Args)
-	return ctx.callWithThis(callerVal, callerVal, expr.Args, args, &node.Loc)
+	callerVal := ctx.EvalExpr(caller)
+	return ctx.callWithThis(callerVal, args, &node.Loc)
 }
 
 func (ctx *EvalContext) evalArgs(args []Node) Args {
@@ -661,25 +753,14 @@ func (ctx *EvalContext) evalArgs(args []Node) Args {
 	return argsVals
 }
 
-func (ctx *EvalContext) callWithThis(fun, thisVal Value, argsNodes []Node, args Args, loc *parser.Loc) Value {
+func (ctx *EvalContext) callWithThis(fun Value, args Args, loc *parser.Loc) Value {
 	callEnv := ctx.Scope
-start:
 	switch fn := fun.(type) {
-	case *Pointer:
-		fun = fn.value()
-		goto start
 	case *Function:
-		fnCtx := NewContext(NewScope(fn.declScope, getValueHash(thisVal), FunctionScope, 0))
 		if fn.async {
 			callEnv.errorWithSource(BuildError, callEnv.path, *loc, "Async functions are not functional yet.")
 		}
-		if fn.arrow {
-			fnCtx.init(ThisStr, thisVal, ConstDecl, fn.Loc)
-		} else {
-			fnCtx.init(ThisStr, NewObject(), ConstDecl, fn.Loc)
-		}
-		ctx.declareParams(fn, argsNodes, args, fnCtx)
-		return ctx.execFrame(fn, fnCtx, *loc)
+		return ctx.execFrame(fn, args, *loc)
 	case *Macro:
 		return fn.call(args, ctx, loc)
 	default:
@@ -689,50 +770,61 @@ start:
 }
 
 func (ctx *EvalContext) evalMemberExpr(node Node) Value {
+	_, member := ctx.evalMember(node)
+	return member
+}
+
+func (ctx *EvalContext) evalMember(node Node) (object Value, member Value) {
 	expr := node.Data.(parser.MemberExpr)
 	objNode := expr.Object
-	object := ctx.EvalExpr(objNode)
+	object = ctx.EvalExpr(objNode)
 	memberNode := expr.Member
 	memberKey := ctx.memberKey(expr)
-start:
+	member = undefined
 	switch obj := object.(type) {
-	// case Number, *Undefined:
-	case *Pointer:
-		object = obj.value()
-		goto start
 	default:
 		ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Cannot read properties of %s (reading '%s')", obj.typeof().string, lib.Green(memberKey.toString().string)))
 	case *Object:
-		return ctx.getMember(obj, memberKey.(*String))
+		member = ctx.getMember(obj, toValidPropKey(memberKey))
+		return
 	case *Array:
-		if obj.typeof() != NumberType {
-			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type array.", lib.Green(obj.typeof().string)))
+		if memberKey.typeof() != NumberType {
+			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type array.", lib.Green(memberKey.typeof().string)))
 		}
 		idx := int(lib.TruncFloat(float64(memberKey.(Number))))
 		if idx < obj.elements.Len() {
-			return obj.elements.At(idx)
+			member = obj.elements.At(idx)
+			return
 		} // undefined
 	case *String:
-		if obj.typeof() != NumberType {
-			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type string.", lib.Green(obj.typeof().string)))
+		if memberKey.typeof() != NumberType {
+			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, lib.Sprintf("Type '%s' cannot be used to index type string.", lib.Green(memberKey.typeof().string)))
 		}
 		idx := int(lib.TruncFloat(float64(memberKey.(Number))))
+		if idx < 0 {
+			idx += len(obj.string)
+		}
 		if idx < len(obj.string) {
-			return NewString(string(rune(obj.string[idx])))
+			member = NewString(string(rune(obj.string[idx])))
+			return
 		} // undefined
 	case *Instance:
-		return ctx.getMember(obj.Object, memberKey.(*String))
+		member = ctx.getMember(obj, toValidPropKey(memberKey))
+		return
 	case *Function:
-		return ctx.getMember(obj.Object, memberKey.(*String))
+		member = ctx.getMember(obj, toValidPropKey(memberKey))
+		return
 	case *Class:
-		return ctx.getMember(obj.Object, memberKey.(*String))
+		member = ctx.getMember(obj, toValidPropKey(memberKey))
+		return
 	case *ScopeObject:
 		if expr.Computed {
 			ctx.errorWithSource(TypeError, ctx.path, memberNode.Loc, "Member expression on scope object cannot be computed.")
 		}
-		return ctx.getMember(scopeToObject(obj), memberKey.(*String))
+		member = ctx.getMember(obj, toValidPropKey(memberKey))
+		return
 	}
-	return undefined
+	return
 }
 
 func (ctx *EvalContext) memberKey(expr parser.MemberExpr) Value {
@@ -751,54 +843,64 @@ type CallFrame struct {
 	// callEnv *EvalContext
 	callEnvPath int
 	callEnvLoc  lib.Loc
-	scope       *EvalContext
+	// scope       *EvalContext
 }
 
 const MAX_CALLSTACK_SIZE = 1_000_000
 
 // ctx is the EvalContext of the callsite.
-func (ctx *EvalContext) execFrame(fn *Function, fnCtx *EvalContext, loc lib.Loc) Value {
+// fnCtx is the context the function body will execute.
+// loc is the Loc of the callsite.
+func (ctx *EvalContext) execFrame(fn *Function, args Args, loc lib.Loc) Value {
+	fnScope := NewFunctionScope(fn, fn.this)
+	// Use the callstack of the caller.
+	fnWorker := fnScope.worker
+	fnScope.worker = ctx.Worker
+	evalCtx := NewContext(fnScope)
+	evalCtx.declareParams(fn, args)
+	defer func() {
+		fnScope.worker = fnWorker
+		ctx.callstack.Pop()
+	}()
 	if ctx.callstack.Len() >= MAX_CALLSTACK_SIZE {
 		ctx.stackOverFlow()
 	}
 	ctx.callstack.Push(&CallFrame{
-		fn:          fn,
-		scope:       fnCtx,
+		fn: fn,
+		// scope:       evalCtx,
 		callEnvPath: ctx.path,
 		callEnvLoc:  loc,
 	})
-	fnCtx.ExecBlock(fn.body)
-	if fnCtx.returned {
-		fnCtx.returned = false
-		fnCtx.terminate = false
+	evalCtx.ExecBlock(fn.body)
+	if evalCtx.returned {
+		evalCtx.returned = false
+		evalCtx.terminate = false
 	} else {
-		fnCtx.stack.Push(undefined)
+		evalCtx.stack.Push(undefined)
 	}
-	rtv := fnCtx.stack.Pop()
+	rtv := evalCtx.stack.Pop()
 	switch rtv.(type) {
 	// Closures
 	case *Function:
 	default:
-		fnCtx.invalidate()
+		evalCtx.invalidate()
 	}
 	return rtv
 }
 
 func (ctx *EvalContext) stackOverFlow() {
-	panic("unimplemented")
+	ctx.raise(RangeError, "Maximum stack size exceeded.", lib.EOL, newStackTrace(10, ctx).string)
 }
 
-func (ctx *EvalContext) declareParams(fn *Function, argsNodes []Node, args Args, fnCtx *EvalContext) {
+func (fnCtx *EvalContext) declareParams(fn *Function, args Args) {
 	paramsLen := len(fn.params)
 	argsLen := len(args)
 	for i, p := range fn.params {
 		var value Value = undefined
-		var argNode Node
 		if i < argsLen {
 			value = args[i]
-			argNode = argsNodes[i]
 		}
-		if fnCtx.declareParam(p, argNode, value, i, args, ctx.Scope) {
+		if fnCtx.declareParam(p, value, i, args) {
 			// rest parameter
 			if i != paramsLen-1 {
 				fnCtx.errorWithSource(SyntaxError, fnCtx.path, p.Loc, "A rest parameter must be last in a parameter list.")
@@ -808,24 +910,9 @@ func (ctx *EvalContext) declareParams(fn *Function, argsNodes []Node, args Args,
 	}
 }
 
-func (ctx *EvalContext) declareParam(p, argNode Node, argument Value, i int, args Args, callEnv *Scope) (shouldReturn bool) {
+func (ctx *EvalContext) declareParam(p Node, argument Value, i int, args Args) (shouldReturn bool) {
 	switch p.Tag {
 	case parser.T_IDENT:
-		switch argument.(type) {
-		case *String, Number, *Pointer:
-			break
-		default:
-			// Only identifiers for now.
-			if argNode.Tag == parser.T_IDENT {
-				name := NewString(string(argNode.Data.(parser.Identifier)))
-				s := callEnv.resolve(name, callEnv, &argNode.Loc)
-				ptr, _ := s.names.Get(name)
-				argument = &Pointer{
-					ptr:   ptr,
-					Scope: callEnv,
-				}
-			}
-		}
 		ctx.init(NewString(string(p.Data.(parser.Identifier))), argument, MutableDecl, p.Loc)
 	case parser.T_RESTORSPREAD:
 		node := p.Data.(Node)
@@ -836,8 +923,28 @@ func (ctx *EvalContext) declareParam(p, argNode Node, argument Value, i int, arg
 				arr.push(args[j])
 			}
 		}
-		ctx.declareParam(node, p, arr, i, args, callEnv)
+		ctx.declareParam(node, arr, i, args)
 		return true
+	case parser.T_OBJECT_LIT:
+		// Tries to cast to object type.
+		cast := valToObjectCast(argument)
+		if cast == null {
+			ctx.errorWithSource(TypeError, 0, p.Loc, "Cannot cast type ", lib.Green(argument.typeof().string), " to object for destructuring.")
+		}
+		dest := p.Data.(parser.ObjectDest)
+		keys := dest.Keys
+		props := dest.Props
+		for i, k := range keys {
+			prop := props[i]
+			key, name := ctx.evalDestKey(prop, k)
+			// If not found, desc.value holds undefined
+			_, desc, _ := lookupProp(cast, key, nil)
+			var value = desc.value
+			if valueIsNullish(value) && prop.Default != nil {
+				value = ctx.EvalExpr(prop.Default)
+			}
+			ctx.init(name, value, MutableDecl, p.Loc)
+		}
 	default:
 		ctx.errorWithSource(BuildError, ctx.path, p.Loc, "Unhandled function parameter node.")
 	}
@@ -862,7 +969,6 @@ func (ctx *EvalContext) evalAssignmentExpr(node Node) Value {
 }
 
 func (ctx *EvalContext) handleAssign(op parser.TokenTag, left Value, right Value, loc parser.Loc, lhs, rhs Node) Value {
-	// isEqualsAssign := false
 	validatedForArithmeticAssign := false
 	goto skip
 errorOnArithmeticAssign:
@@ -882,10 +988,20 @@ skip:
 		}
 		return left
 	case parser.EQUALS:
+	case parser.PLUS_EQUALS:
+		if left.typeof() == NumberType && right.typeof() == NumberType {
+			right = ctx.evalBinaryOp(left.(Number), right.(Number), parser.PLUS, loc)
+			// validatedForArithmeticAssign = true
+		} else if left.typeof() == StringType || right.typeof() == StringType {
+			right = NewString(left.toString().string + right.toString().string)
+		} else if !validatedForArithmeticAssign {
+			validatedForArithmeticAssign = true
+			goto errorOnArithmeticAssign
+		}
 	case
-		parser.MINUS_EQUALS, parser.PLUS_EQUALS,
-		parser.DIVIDE_EQUALS, parser.TIMES_EQUALS,
-		parser.MODULO_EQUALS, parser.STAR2_EQUALS:
+		parser.MINUS_EQUALS, parser.DIVIDE_EQUALS,
+		parser.TIMES_EQUALS, parser.MODULO_EQUALS,
+		parser.STAR2_EQUALS:
 		if !validatedForArithmeticAssign {
 			validatedForArithmeticAssign = true
 			goto errorOnArithmeticAssign
@@ -959,11 +1075,7 @@ skip:
 		objectNode := expr.Object
 		objectVal := ctx.EvalExpr(objectNode)
 		memberVal := ctx.memberKey(expr)
-	start:
 		switch obj := objectVal.(type) {
-		case *Pointer:
-			objectVal = obj.value()
-			goto start
 		case *Array:
 			// Array index is already validated when evaluating left.
 			idx := float64(memberVal.(Number))
@@ -972,9 +1084,9 @@ skip:
 			}
 			return obj.elements.Set(uintptr(idx), right)
 		case *Object:
-			return ctx.setMember(obj, toValidPropKey(memberVal), right, ctx.Scope, loc)
+			return ctx.setMember(obj, obj, toValidPropKey(memberVal), right, loc)
 		case *Instance:
-			return ctx.setMember(obj.Object, toValidPropKey(memberVal), right, ctx.Scope, loc)
+			return ctx.setMember(obj.Object, obj, toValidPropKey(memberVal), right, loc)
 		case *ScopeObject:
 			name := memberVal.toString()
 			if _, ok := obj.names.Get(name); ok {
@@ -984,7 +1096,7 @@ skip:
 				obj.init(name, right, MutableDecl, lhs.Loc)
 			}
 		case *Function:
-			return ctx.setMember(obj.Object, toValidPropKey(memberVal), right, ctx.Scope, loc)
+			return ctx.setMember(obj.Object, obj, toValidPropKey(memberVal), right, loc)
 		default:
 			ctx.errorWithSource(BuildError, ctx.path, loc, "Cannot assign to type ", obj.typeof().string, ".")
 		}
@@ -1019,8 +1131,11 @@ skip:
 }
 
 func toValidPropKey(prop Value) *String {
-	if prop.typeof() == StringType {
+	switch prop.typeof() {
+	case StringType:
 		return prop.(*String)
+	case SymbolType:
+		return NewString(prop.toString().string)
 	}
 	return NewString(prop.toString().string)
 }
@@ -1042,16 +1157,16 @@ func (ctx *EvalContext) evalIncreExpr(node Node) Value {
 	if pre {
 		switch op {
 		case parser.MINUS2:
-			return ctx.handleAssign(parser.PLUS_EQUALS, n, n-1, node.Loc, operand, operand)
+			return ctx.handleAssign(parser.PLUS_EQUALS, n, Number(-1), node.Loc, operand, operand)
 		case parser.PLUS2:
-			return ctx.handleAssign(parser.PLUS_EQUALS, n, n+1, node.Loc, operand, operand)
+			return ctx.handleAssign(parser.PLUS_EQUALS, n, Number(1), node.Loc, operand, operand)
 		}
 	} else {
 		switch op {
 		case parser.MINUS2:
-			ctx.handleAssign(parser.PLUS_EQUALS, n, n-1, node.Loc, operand, operand)
+			ctx.handleAssign(parser.PLUS_EQUALS, n, Number(-1), node.Loc, operand, operand)
 		case parser.PLUS2:
-			ctx.handleAssign(parser.PLUS_EQUALS, n, n+1, node.Loc, operand, operand)
+			ctx.handleAssign(parser.PLUS_EQUALS, n, Number(1), node.Loc, operand, operand)
 		}
 	}
 	return n
@@ -1069,4 +1184,201 @@ func (ctx *EvalContext) evalLogicalExpr(node Node) Value {
 		return val
 	}
 	return ctx.EvalExpr(expr.Rhs)
+}
+
+func (ctx *EvalContext) evalNewExpr(node Node) Value {
+	expr := node.Data.(parser.OperandExpr)
+	operand := expr.Operand
+	var classVal Value
+	var args = Args{}
+	switch operand.Tag {
+	case parser.T_CALLEXPR:
+		e := operand.Data.(parser.CallExpr)
+		args = ctx.evalArgs(e.Args)
+		classVal = ctx.EvalExpr(e.Caller)
+	default:
+		classVal = ctx.EvalExpr(operand)
+	}
+	var class *Class
+	switch classVal := classVal.(type) {
+	case *Class:
+		class = classVal
+	default:
+		ctx.errorWithSource(TypeError, 0, node.Loc, "Cannot instantiate type ", classVal.typeof().string, ", it is not a constructor.")
+	}
+	extends := class.extends
+	ctorFn := class.ctor
+	this := NewInstance(class)
+	classBody := NewContext(ctorFn.declScope)
+	classBody.object = this
+	ptr := classBody.names.GetS(ThisStr)
+	classBody.assign(ptr, this)
+	ctx.instantiate(class, classBody, this)
+	if extends != nil {
+		super := NewInstance(extends)
+		superBody := NewContext(extends.ctor.declScope)
+		superBody.object = super
+		ptr := superBody.names.GetS(ThisStr)
+		superBody.assign(ptr, super)
+		ctx.instantiate(extends, superBody, super)
+		this.proto.proto = super.Object
+	}
+	if ctorFn != nil {
+		ctx.execCtor(ctorFn, this, args, node.Loc)
+	}
+	return this
+}
+
+func (*EvalContext) instantiate(class *Class, classBody *EvalContext, this *Instance) {
+	defProp := class.defProp
+	methods := class.methods
+	props := class.props
+	modifiers := class.modifiers
+	if defProp.Node != nil {
+		decl := defProp.Data.(parser.Decl)
+		name := classBody.evalMemberKey(defProp.Computed, decl.Lhs)
+		private := lib.InSlice(defProp.Modifiers, parser.K_private)
+		static := lib.InSlice(defProp.Modifiers, parser.K_static)
+		var rhs Value
+		if decl.Rhs == nil {
+			rhs = undefined
+		} else {
+			rhs = classBody.EvalExpr(decl.Rhs)
+		}
+		// NOTE: Use the struct directly to allow explanations.
+		this.proto.own.Set(name, PropertyDescriptor{
+			value: rhs,
+			// Cannot reconfigure descriptors.
+			configurable: false,
+			enumerable:   true,
+			writable:     true,
+			public:       !private,
+			getter:       nil,
+			setter:       nil,
+			static:       static,
+		})
+		this.defaultVal = rhs
+	}
+	for i, p := range props {
+		decl := p.Data.(parser.Decl)
+		name := classBody.evalMemberKey(p.Computed, decl.Lhs)
+		private := lib.InSlice(modifiers[i], parser.K_private)
+		static := lib.InSlice(modifiers[i], parser.K_static)
+		var rhs Value
+		if decl.Rhs == nil {
+			rhs = undefined
+		} else {
+			rhs = classBody.EvalExpr(decl.Rhs)
+		}
+		// NOTE: Use the struct directly to allow explanations.
+		this.proto.own.Set(name, PropertyDescriptor{
+			value: rhs,
+			// Cannot reconfigure descriptors.
+			configurable: false,
+			enumerable:   true,
+			writable:     true,
+			public:       !private,
+			getter:       nil,
+			setter:       nil,
+			static:       static,
+		})
+	}
+	for i, m := range methods {
+		private := lib.InSlice(modifiers[i], parser.K_private)
+		static := lib.InSlice(modifiers[i], parser.K_static)
+		switch m.Tag {
+		case parser.T_ACCESSOR:
+			acc := m.Data.(parser.Accessor)
+			fn := acc.Node
+			accProp := classBody.evalFnExpr(fn)
+			var getter, setter *Function
+			if acc.Getter {
+				getter = accProp
+			} else {
+				setter = accProp
+			}
+			this.proto.own.Set(
+				classBody.evalMemberKey(m.Computed, fn.Data.(parser.FnDecl).Name),
+				PropertyDescriptor{
+					value:        undefined,
+					configurable: false,
+					enumerable:   true,
+					// Methods and accessors are constants.
+					writable: false,
+					public:   !private,
+					getter:   getter,
+					setter:   setter,
+					static:   static,
+				},
+			)
+			// Method
+		default:
+			fn := classBody.evalFnExpr(m.Node)
+			nameNode := m.Data.(parser.FnDecl).Name
+			this.proto.own.Set(classBody.evalMemberKey(m.Computed, nameNode), PropertyDescriptor{
+				value:        fn,
+				configurable: false,
+				enumerable:   true,
+				writable:     false,
+				public:       !private,
+				getter:       nil,
+				setter:       nil,
+				static:       static,
+			})
+		}
+	}
+}
+
+func (ctx *EvalContext) execCtor(ctorFn *Function, this Value, args Args, loc parser.Loc) {
+	ctorFn.this = this
+	ctx.execFrame(ctorFn, args, loc)
+}
+
+func (ctx *EvalContext) evalSuperExpr(node Node) *Undefined {
+	class, this := ctx.locateClassForSuper(ctx.Scope, node.Loc)
+	args := ctx.evalArgs(node.Children)
+	ctx.execCtor(class.ctor, this, args, node.Loc)
+	return undefined
+}
+
+func (ctx *EvalContext) locateClassForSuper(scope *Scope, loc parser.Loc) (*Class, *Instance) {
+	var class *Class
+	if scope == nil || scope.of == FunctionScope {
+		ctx.errorWithSource(SyntaxError, 0, loc, "Super calls are not permitted outside constructors or in nested functions inside constructors.")
+	}
+	if scope.of != ClassScope {
+		return ctx.locateClassForSuper(scope.parent, loc)
+	}
+	this := scope.object.(*Instance)
+	class = this.class
+	if class.extends == nil {
+		ctx.errorWithSource(SyntaxError, 0, loc, "'super' can only be referenced in a derived class.")
+	}
+	return class, this
+}
+
+func (ctx *EvalContext) evalInExpr(node Node) Boolean {
+	expr := node.Data.(parser.LROpExpr)
+	lNode := expr.Lhs
+	rNode := expr.Rhs
+	lhs := ctx.EvalExpr(lNode)
+	rhs := ctx.EvalExpr(rNode)
+	key := toValidPropKey(lhs)
+	var object *Object
+	switch v := rhs.(type) {
+	case *Array, Boolean, *Macro, Number, *RAW, *String, *Symbol, *Undefined:
+		ctx.errorWithSource(TypeError, 0, node.Loc, lib.Sprintf("Cannot use 'in' operator to search for '%s' in %s", key.string, rhs.toString().string))
+	case *Class:
+		object = v.Object
+	case *Function:
+		object = v.Object
+	case *Instance:
+		object = v.Object
+	case *Object:
+		object = v
+	case *ScopeObject:
+		return Boolean(v.names.Has(key))
+	}
+	_, _, f := lookupProp(object, key, nil)
+	return Boolean(f)
 }

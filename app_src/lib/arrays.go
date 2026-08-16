@@ -33,14 +33,17 @@ func NewArray[T any](c uintptr) *Array[T] {
 	}
 }
 
-// Appends el to the end of the array.
+// Appends els to the end of the array.
 // Push resizes/grows the array as required.
-func (arr *Array[T]) Push(el T) {
+func (arr *Array[T]) Push(els ...T) {
 	arr.mutex.Lock()
 	defer arr.mutex.Unlock()
+	offset := arr.offset
+	arr.offset += uintptr(len(els))
 	arr.resize()
-	arr.allocator[arr.offset] = el
-	arr.offset++
+	for i, el := range els {
+		arr.allocator[offset+uintptr(i)] = el
+	}
 }
 
 // Resizes/grows the array if arr.offset+1 >= arr.cap
@@ -58,6 +61,7 @@ func (arr *Array[T]) resize() {
 // Retrives the element at the index idx.
 // idx can be negative and will be calculated as `arr.offset-idx`
 // counting from the end of the array.
+// returns nil if the element does not exits.
 func (arr *Array[T]) At(idx int) T {
 	index := uintptr(idx)
 	if idx < 0 {
@@ -105,14 +109,17 @@ func (arr *Array[T]) Shift() T {
 // returns the deleted element.
 // If arr is empty, Pop panics.
 func (arr *Array[T]) Pop() T {
-	if arr.offset == 0 && DEBUG_MODE {
-		Panic("Array.Pop: cannot modify empty array.")
+	if arr.offset == 0 {
+		if DEBUG_MODE {
+			Panic("Array.Pop: cannot modify empty array.")
+		}
+		return arr.At(0)
 	}
 	el := arr.At(-1)
 	arr.mutex.Lock()
 	defer arr.mutex.Unlock()
-	index := uintptr(arr.offset - 1)
-	delete(arr.allocator, index)
+	arr.offset--
+	delete(arr.allocator, arr.offset)
 	return el
 }
 
@@ -136,7 +143,7 @@ func (arr *Array[T]) Cap() int {
 }
 
 // Sets the element at index idx to value.
-// If idx is greate than the length of the array, the array is grown to one greater than idx.
+// If idx is greater than the length of the array, the array is grown to one greater than idx.
 func (arr *Array[T]) Set(idx uintptr, value T) T {
 	arr.mutex.Lock()
 	defer arr.mutex.Unlock()
@@ -177,4 +184,13 @@ func (arr *Array[T]) Slice(startIdx, endIdx int) *Array[T] {
 		startIdx++
 	}
 	return newArr
+}
+
+// Copies the elements in src to arr.
+// Overites existing elements if there indices overlap.
+func (arr *Array[T]) Copy(src *Array[T]) *Array[T] {
+	for k, v := range src.allocator {
+		arr.Set(k, v)
+	}
+	return arr
 }

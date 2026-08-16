@@ -2,10 +2,7 @@ package parser
 
 import (
 	"aspire/are/main/lib"
-	"sync"
 )
-
-// var debugMode = false
 
 // type Cache struct {
 // 	ParserVersion string
@@ -17,11 +14,11 @@ import (
 type Loc = lib.Loc
 
 type Parser struct {
-	Imports map[string]int
+	Imports *lib.Map[string, int]
 	Program *Program
+	errors  *lib.Array[string]
 	lib.WaitGroup
-	errored bool
-	mu      sync.RWMutex
+	mu lib.RWMutex
 }
 
 func (p *Parser) ParseProgram(path string, builtin, isMain, isRepl bool) (m *ModuleParser) {
@@ -32,11 +29,10 @@ func (p *Parser) ParseProgram(path string, builtin, isMain, isRepl bool) (m *Mod
 	}
 	m.Parse()
 	p.Wait()
-	p.mu.RLock()
-	errored := p.errored
-	p.mu.RUnlock()
-	if errored {
-		panic("")
+	if p.errors.Len() != 0 {
+		p.errors.ForEach(func(_ int, s string) {
+			lib.Println(s)
+		})
 	}
 	return
 }
@@ -51,32 +47,31 @@ type ModuleParser struct {
 	tokenIndex uint64
 	builtin    bool
 	OwnModule  *Module
-	Invalid    bool
 }
 
 func init() {
-	defStmt(_const, parseVarDeclStmt)
-	defStmt(_let, parseVarDeclStmt)
-	defStmt(_var, parseVarDeclStmt)
-	defStmt(_if, parseIfStmt)
+	defStmt(K_const, parseVarDeclStmt)
+	defStmt(K_let, parseVarDeclStmt)
+	defStmt(K_var, parseVarDeclStmt)
+	defStmt(K_if, parseIfStmt)
 	defStmt(O_BRACE, parseBlockStmt)
 	defStmt(LABEL, parseLabel)
-	defStmt(_throw, parseThrowStmt)
-	defStmt(_fn, parseFunDecl)
-	defStmt(_async, parseFunDecl)
-	defStmt(_return, parseReturnStmt)
-	defStmt(_while, parseWhileStmt)
-	defStmt(_do, parseDoWhileStmt)
-	defStmt(_for, parseForStmt)
-	defStmt(_switch, parseSwitchStmt)
-	defStmt(_yield, parse_yield_stmt)
-	defStmt(_import, parse_import_stmt)
-	defStmt(_export, parse_export_stmt)
-	defStmt(_class, parse_class_stmt)
-	defStmt(_try, parse_try_catch_finally)
-	defStmt(_fallthrough, parse_fallthrough)
-	defStmt(_break, parse_break_stmt)
-	defStmt(_continue, parse_continue_stmt)
+	defStmt(K_throw, parseThrowStmt)
+	defStmt(K_fn, parseFunDecl)
+	defStmt(K_async, parseFunDecl)
+	defStmt(K_return, parseReturnStmt)
+	defStmt(K_while, parseWhileStmt)
+	defStmt(K_do, parseDoWhileStmt)
+	defStmt(K_for, parseForStmt)
+	defStmt(K_switch, parseSwitchStmt)
+	defStmt(K_yield, parse_yield_stmt)
+	defStmt(K_import, parse_import_stmt)
+	defStmt(K_export, parse_export_stmt)
+	defStmt(K_class, parse_class_stmt)
+	defStmt(K_try, parse_try_catch_finally)
+	defStmt(K_fallthrough, parse_fallthrough)
+	defStmt(K_break, parse_break_stmt)
+	defStmt(K_continue, parse_continue_stmt)
 
 	defNud(IDENTIFIER, parse_ident)
 	defNud(STRING, parse_string)
@@ -84,17 +79,17 @@ func init() {
 	defNud(NOT, parse_not_expr)
 	defNud(O_PAREN, parse_open_paren)
 
-	defNud(_new, parse_new_expr)
-	defNud(_void, parse_void_expr)
-	defNud(_async, parse_async_fn_expr)
-	defNud(_typeof, parse_typeof_expr)
-	defNud(_match, parse_match_expr)
-	defNud(_from, parse_from_expr)
-	defNud(_class, parse_class_expr)
-	defNud(_gt, parse_globalthis)
-	defNud(_super, parse_super_expr)
-	defNud(_await, parse_await_expr)
-	defNud(_fn, parseFunExpr)
+	defNud(K_new, parse_new_expr)
+	defNud(K_void, parse_void_expr)
+	defNud(K_async, parse_async_fn_expr)
+	defNud(K_typeof, parse_typeof_expr)
+	defNud(K_match, parse_match_expr)
+	defNud(K_from, parse_from_expr)
+	defNud(K_class, parse_class_expr)
+	defNud(K_gt, parse_globalthis)
+	defNud(K_super, parse_super_expr)
+	defNud(K_await, parse_await_expr)
+	defNud(K_fn, parseFunExpr)
 
 	defNud(O_BRACE, parse_object_lit)
 	defNud(O_BRACKET, parse_array_lit)
@@ -156,18 +151,20 @@ func init() {
 	defLed(XOR_EQUALS, parse_bitwise_expr, ASSIGNMENT_BP)
 	defLed(BITCLEAR_EQUALS, parse_bitwise_expr, ASSIGNMENT_BP)
 
-	defLed(_instanceof, parse_instanceof_expr, COMPARISON_BP)
+	defLed(K_instanceof, parse_instanceof_expr, COMPARISON_BP)
+	defLed(K_in, parse_in_expr, IN_BP)
 
 	defLed(NULLISH, parse_nullish_expr, NULLISH_COALLESCE_BP)
 }
 
 func NewParser() *Parser {
 	return &Parser{
-		Imports: map[string]int{},
+		Imports: lib.NewMap[string, int](),
 		Program: &Program{
 			Main:    &Module{},
 			Modules: map[int]*Module{},
 		},
+		errors: lib.NewArray[string](0),
 	}
 }
 
@@ -180,15 +177,14 @@ func NewBuiltinsParser(name string) *ModuleParser {
 			lib.JoinPaths(lib.DirOf(lib.ExecPath()), "..", "app_src", "lib", "stdlib", name),
 		)
 		if err != nil {
-			lib.Panic(err)
+			(&ModuleParser{}).parseError(PathError, err.Error())
 		}
 		bytes = b
 		key = k
 	} else {
-		// path := lib.JoinPaths("stdlib", name)
 		b, err := lib.EMBEDFS.ReadFile(path)
 		if err != nil {
-			lib.Panic(err)
+			(&ModuleParser{}).parseError(PathError, err.Error())
 		}
 		bytes = b
 		key = lib.WriteCacheFile(bytes, path)
@@ -200,8 +196,9 @@ func NewBuiltinsParser(name string) *ModuleParser {
 	lexer := NewLexer(bytes, key)
 	tokens := lexer.Tokenize()
 	module := &Module{
-		Path: key,
-		Body: []*Node{},
+		Path:    key,
+		Body:    []*Node{},
+		Invalid: false,
 	}
 	GlobalParser.mu.Lock()
 	GlobalParser.Program.Modules[key] = module
@@ -213,7 +210,6 @@ func NewBuiltinsParser(name string) *ModuleParser {
 		tokenIndex: 0,
 		OwnModule:  module,
 		builtin:    true,
-		Invalid:    false,
 		Path:       path,
 	}
 }
@@ -249,15 +245,15 @@ func NewModuleParser(path string, isMain, isRepl bool) (mp *ModuleParser) {
 		tokens:     tokens,
 		tokenIndex: 0,
 		OwnModule: &Module{
-			Path: pk,
-			Body: []*Node{},
+			Path:    pk,
+			Body:    []*Node{},
+			Invalid: false,
 		},
 		builtin: false,
-		Invalid: false,
 		Path:    path,
 	}
+	GlobalParser.Imports.Set(path, pk)
 	GlobalParser.mu.Lock()
-	GlobalParser.Imports[path] = pk
 	if isMain {
 		GlobalParser.Program.Main = mp.OwnModule
 	} else {
@@ -271,7 +267,13 @@ func (p *ModuleParser) Parse() {
 	if p == nil {
 		return
 	}
-	defer func() { p.Invalid = recover() != nil }()
+	defer func() {
+		err := recover()
+		p.OwnModule.Invalid = err != nil
+		if p.OwnModule.Invalid {
+			GlobalParser.errors.Push(err.(string))
+		}
+	}()
 	for p.not_eof() {
 		if p.eatSemiColons() {
 			continue
@@ -328,13 +330,13 @@ func (p *ModuleParser) parseStmt() *Node {
 
 func parseFunDecl(p *ModuleParser) *Node {
 	var isAsync = false
-	if p.isAt(_async) {
+	if p.isAt(K_async) {
 		p.next()
 		isAsync = true
 	}
-	loc := p.expect(_fn).loc // function
+	loc := p.expect(K_fn).loc // function
 	nameTk := p.expect(IDENTIFIER)
-	return parseFnFromParams(p, StringNode(p.src(nameTk), nameTk.loc), isAsync, false, loc)
+	return parseFnFromParams(p, StringNode(p.src(nameTk), nameTk.loc), isAsync, false, false, loc)
 }
 
 const AnonymousName = "(anonymous)"
@@ -342,59 +344,67 @@ const AnonymousName = "(anonymous)"
 func parseFunExpr(p *ModuleParser) *Node {
 	isAsync := false
 	start := p.currLoc()
-	if p.isAt(_async) {
+	if p.isAt(K_async) {
 		p.next()
 		isAsync = true
 	}
-	p.expect(_fn)
+	p.expect(K_fn)
 	// Function expression is Anonymous
-	return parseFnFromParams(p, StringNode(AnonymousName, lib.DumbyLoc), isAsync, true, start)
+	return parseFnFromParams(p, StringNode(AnonymousName, lib.DumbyLoc), isAsync, true, false, start)
 }
 
-func parseFunMethod(p *ModuleParser) *Node {
+func parseFunMethod(p *ModuleParser) Member {
 	isAsync := false
 	idx := p.tokenIndex
-	if p.isAt(_async) {
+	if p.isAt(K_async) {
 		p.next()
 		isAsync = true
 	}
 	if p.isAt(ACCESSOR) {
 		tk := p.eat()
-		getter := tk.tag == _get
+		getter := tk.tag == K_get
 		if isAsync {
 			p.tokenIndex = idx
 			p.parseError(SyntaxError, "'async' modifier cannot be used here.")
 		}
-		return &Node{
+		method := parseMethod(p, isAsync)
+		return Member{method.Computed, &Node{
 			Tag:      T_ACCESSOR,
 			Children: nil,
 			Data: Accessor{
 				Getter: getter,
-				Node:   parseMethod(p, isAsync),
+				Node:   method.Node,
 			},
 			Loc: tk.loc,
-		}
+		}}
 	}
 	return parseMethod(p, isAsync)
 }
 
-func parseMethod(p *ModuleParser, isAsync bool) *Node {
+func parseMethod(p *ModuleParser, isAsync bool) Member {
 	var NameNode *Node
+	computed := true
 	switch p.atType(0) {
 	case O_BRACKET:
 		p.next() // [
 		NameNode = p.parseExpr(DEFAULT_BP)
 		p.expect(C_BRACKET)
-	case IDENTIFIER, STRING, NUMBER:
+	case IDENTIFIER:
+		computed = false
 		NameNode = parse_ident(p)
+	case STRING:
+		NameNode = parse_string(p)
+	case NUMBER:
+		NameNode = parse_number(p)
 	default:
-		p.expect(IDENTIFIER)
+		computed = false
+		NameNode = parse_prop_name(p)
 	}
 	// Method cannot be Anonymous
-	return parseFnFromParams(p, NameNode, isAsync, false, NameNode.Loc)
+	return Member{Node: parseFnFromParams(p, NameNode, isAsync, false, true, NameNode.Loc), Computed: computed}
 }
 
-func parseFnFromParams(p *ModuleParser, NameNode *Node, isAsync, isAnony bool, start Loc) *Node {
+func parseFnFromParams(p *ModuleParser, NameNode *Node, isAsync, isAnony, isMethod bool, start Loc) *Node {
 	params := p.parse_params()
 	body := p.parseBlock()
 	return &Node{
@@ -404,7 +414,7 @@ func parseFnFromParams(p *ModuleParser, NameNode *Node, isAsync, isAnony bool, s
 			Params:    params,
 			Name:      NameNode,
 			Async:     isAsync,
-			Arrow:     false,
+			Arrow:     isMethod,
 			Anonymous: isAnony,
 		},
 		Loc: start,
@@ -412,7 +422,7 @@ func parseFnFromParams(p *ModuleParser, NameNode *Node, isAsync, isAnony bool, s
 }
 
 func parseReturnStmt(p *ModuleParser) *Node {
-	end := p.expect(_return).loc // return
+	end := p.expect(K_return).loc // return
 	var value *Node
 	if !p.eatSemiColons() && p.notAt(C_BRACE) {
 		value = p.parseExpr(DEFAULT_BP)
@@ -426,7 +436,7 @@ func parseReturnStmt(p *ModuleParser) *Node {
 }
 
 func parseThrowStmt(p *ModuleParser) *Node {
-	start := p.expect(_throw).loc // throw
+	start := p.expect(K_throw).loc // throw
 	value := p.parseExpr(DEFAULT_BP)
 	return &Node{
 		Tag:      T_THROW,
@@ -437,9 +447,9 @@ func parseThrowStmt(p *ModuleParser) *Node {
 }
 
 func parseWhileStmt(p *ModuleParser) *Node {
-	start := p.expect(_while).loc // while
+	start := p.expect(K_while).loc // while
 	condition := p.parseCondition()
-	end := condition.Loc
+	end := condition.Node.Loc
 	var body []*Node
 	if !p.eatSemiColon() {
 		body = p.parseBlockOrStmt()
@@ -457,7 +467,7 @@ func parseWhileStmt(p *ModuleParser) *Node {
 }
 
 func parseForStmt(p *ModuleParser) *Node {
-	start := p.expect(_for).loc // 'for'
+	start := p.expect(K_for).loc // 'for'
 	p.expect(O_PAREN)
 	tag := T_TFORLOOP
 	var before_lhs *Node
@@ -481,8 +491,8 @@ func parseForStmt(p *ModuleParser) *Node {
 		declKind := handleDeclKeyword(p)
 		p.next()
 		lhs := p.parseVarDeclLhs()
-		if p.isAt(_in) || p.isAt(_of) {
-			if p.eat().tag == _in {
+		if p.isAt(K_in) || p.isAt(K_of) {
+			if p.eat().tag == K_in {
 				op = In_Op
 			} else {
 				op = Of_Op
@@ -526,9 +536,9 @@ func parseForStmt(p *ModuleParser) *Node {
 }
 
 func parseDoWhileStmt(p *ModuleParser) *Node {
-	start := p.expect(_do).loc // do
+	start := p.expect(K_do).loc // do
 	var body = p.parseBlockOrStmt()
-	p.expect(_while)
+	p.expect(K_while)
 	condition := p.parseCondition()
 	return &Node{
 		Tag:      T_WHILE,
@@ -538,7 +548,7 @@ func parseDoWhileStmt(p *ModuleParser) *Node {
 			Body:      body,
 			Condition: condition,
 		},
-		Loc: p.loc(start, condition.Loc),
+		Loc: p.loc(start, condition.Node.Loc),
 	}
 }
 
@@ -574,11 +584,11 @@ func parseVarDecl(p *ModuleParser) *Node {
 func handleDeclKeyword(p *ModuleParser) DeclKind {
 	declType := MutableDecl
 	switch p.atType(0) {
-	case _const:
+	case K_const:
 		declType = ConstantDecl
-	case _var:
+	case K_var:
 		declType = HoistedDecl
-	case _let:
+	case K_let:
 		break
 	default:
 		p.parseError(SyntaxError, "Expected a declaration keyword.")
@@ -616,6 +626,22 @@ func (p *ModuleParser) parseVarDeclLhs() *Node {
 	}
 }
 
+// report == true if the expr is valid destructuring syntax
+func (p *ModuleParser) parse_array_or_destructuring() (node *Node, report bool) {
+	idx := p.tokenIndex
+	defer func() {
+		if recover() != nil {
+			// report = false
+			p.tokenIndex = idx
+			p.OwnModule.Invalid = false
+			node = parse_array_lit(p)
+		}
+	}()
+	node = p.parse_array_destructuring()
+	report = true
+	return
+}
+
 func (p *ModuleParser) parse_array_destructuring() *Node {
 	start := p.expect(O_BRACKET).loc
 	elements := []*Node{}
@@ -644,6 +670,22 @@ func (p *ModuleParser) parse_array_destructuring() *Node {
 	}
 }
 
+// report == true if the expr is valid destructuring syntax
+func (p *ModuleParser) parse_object_or_destructuring() (node *Node, report bool) {
+	idx := p.tokenIndex
+	defer func() {
+		if recover() != nil {
+			// report = false
+			p.tokenIndex = idx
+			p.OwnModule.Invalid = false
+			node = parse_object_lit(p)
+		}
+	}()
+	node = p.parse_object_destructuring()
+	report = true
+	return
+}
+
 func (p *ModuleParser) parse_object_destructuring() *Node {
 	start := p.expect(O_BRACE).loc
 	props := map[NodeIndex]ObjectDestProp{}
@@ -652,9 +694,10 @@ func (p *ModuleParser) parse_object_destructuring() *Node {
 		var value, def *Node
 		var computed bool = false
 		idx := len(keys)
-		switch p.atType(0) {
-		case IDENTIFIER:
-			ident := parse_ident(p)
+		at := p.atType(0)
+		switch {
+		case at == IDENTIFIER || p.isAt(KEYWORD):
+			ident := parse_prop_name(p)
 			keys = append(keys, ident)
 			if p.notAt(COLON) {
 				value = ident
@@ -662,16 +705,16 @@ func (p *ModuleParser) parse_object_destructuring() *Node {
 				p.next() // :
 				value = parse_ident(p)
 			}
-		case STRING, NUMBER:
+		case at == STRING || at == NUMBER:
 			key := p.parseExpr(PRIMARY_BP)
 			keys = append(keys, key)
 			if p.isAt(O_PAREN) {
-				value = parseFnFromParams(p, key, false, false, key.Loc)
+				value = parseFnFromParams(p, key, false, false, true, key.Loc)
 			} else {
 				p.expect(COLON)
 				value = parse_ident(p)
 			}
-		case O_BRACKET:
+		case at == O_BRACKET:
 			p.next() // [
 			key := p.parseExpr(DEFAULT_BP)
 			p.expect(C_BRACKET)
@@ -708,11 +751,11 @@ func (p *ModuleParser) parse_object_destructuring() *Node {
 }
 
 func parseIfStmt(p *ModuleParser) *Node {
-	loc := p.expect(_if).loc
+	loc := p.expect(K_if).loc
 	condition := p.parseCondition()
 	body := p.parseBlockOrStmt()
 	var elseBlock []*Node
-	if p.isAt(_else) {
+	if p.isAt(K_else) {
 		p.next()
 		elseBlock = p.parseBlockOrStmt()
 	}
@@ -727,13 +770,15 @@ func parseIfStmt(p *ModuleParser) *Node {
 	}
 }
 
-func (p *ModuleParser) parseCondition() *Node {
+func (p *ModuleParser) parseCondition() (cond Condition) {
 	p.expect(O_PAREN)
 	defer p.expect(C_PAREN)
 	if p.isAt(VARDECL) {
-		return parseVarDecl(p)
+		cond.Decl = parseVarDecl(p)
+		p.expect(SEMICOLON)
 	}
-	return p.parseExpr(DEFAULT_BP)
+	cond.Node = p.parseExpr(DEFAULT_BP)
+	return
 }
 
 func parseBlockStmt(p *ModuleParser) *Node {
@@ -776,22 +821,35 @@ func parseLabel(p *ModuleParser) *Node {
 }
 
 func parseSwitchStmt(p *ModuleParser) *Node {
-	loc := p.expect(_switch).loc
-	condition := p.parseCondition()
+	loc := p.expect(K_switch).loc
+
+	p.expect(O_PAREN)
+	var condition *Node
+	if p.isAt(VARDECL) {
+		condition = parseVarDecl(p)
+	} else {
+		condition = p.parseExpr(DEFAULT_BP)
+	}
+	p.expect(C_PAREN)
+
 	p.expect(O_BRACE)
 	cases := map[NodeIndex][]*Node{}
-	matches := []*Node{}
+	matches := [][]*Node{}
 	var defaultCase []*Node
 	for p.not_eof() && p.notAt(C_BRACE) {
 		idx := len(matches)
-		if p.isAt(_default) {
+		if p.isAt(K_default) {
 			p.next()
 			p.expect(COLON)
 			body := p.parseBlockOrStmt()
 			defaultCase = body
 		} else {
-			p.expect(_case)
-			match := p.parseExpr(DEFAULT_BP)
+			p.expect(K_case)
+			match := []*Node{p.parseExpr(DEFAULT_BP)}
+			for p.isAt(COMMA) {
+				p.next()
+				match = append(match, p.parseExpr(DEFAULT_BP))
+			}
 			p.expect(COLON)
 			body := p.parseBlockOrStmt()
 			matches = append(matches, match)
@@ -813,7 +871,7 @@ func parseSwitchStmt(p *ModuleParser) *Node {
 }
 
 func parse_yield_stmt(p *ModuleParser) *Node {
-	loc := p.expect(_yield).loc
+	loc := p.expect(K_yield).loc
 	return &Node{
 		Tag:      T_YIELDSTMT,
 		Children: nil,
@@ -823,7 +881,7 @@ func parse_yield_stmt(p *ModuleParser) *Node {
 }
 
 func parse_import_stmt(p *ModuleParser) *Node {
-	loc := p.expect(_import).loc
+	loc := p.expect(K_import).loc
 	imp_path := "invalid-path.as"
 	ns := ""
 	ucc := false
@@ -859,7 +917,7 @@ func parse_import_stmt(p *ModuleParser) *Node {
 }
 
 func parse_export_stmt(p *ModuleParser) *Node {
-	loc := p.expect(_export).loc
+	loc := p.expect(K_export).loc
 	var export *Node
 	if p.isAt(DECL) {
 		export = p.parseStmt()
@@ -877,53 +935,72 @@ func parse_export_stmt(p *ModuleParser) *Node {
 }
 
 func parse_class_stmt(p *ModuleParser) *Node {
-	loc := p.expect(_class).loc
+	loc := p.expect(K_class).loc
 	name := string(parse_ident(p).Data.(Identifier))
 	return parse_class_decl(p, name, false, loc)
 }
 
 func parse_class_decl(p *ModuleParser, name string, isAnony bool, loc lib.Loc) *Node {
-	methods := []*Node{}
-	props := []*Node{}
-	var defaultProp, constructor, extends *Node
-	if p.isAt(_extends) {
+	methods := map[int]Member{}
+	props := map[int]Member{}
+	memberModifiers := [][]TokenTag{}
+	var defaultProp DefaultProp
+	var constructor, extends *Node
+	if p.isAt(K_extends) {
 		p.next()
 		extends = p.parseExpr(ASSIGNMENT_BP)
 	}
 	p.expect(O_BRACE)
+	// Increment after use
+	memberCount := 0
+	hasCtor := false
 	for p.not_eof() && p.notAt(C_BRACE) {
 		start := p.currLoc()
 		switch p.atType(0) {
-		case _ctor:
+		case K_ctor:
+			if hasCtor {
+				p.parseError(SyntaxError, "Multiple constructor implementations are not allowed.", lib.EOL, "First implementation is ", lib.SourceAtPosition(p.Path, constructor.Loc))
+			}
+			hasCtor = true
 			ctor := p.eat()
 			// Constructor's name is the class name.
-			constructor = parseFnFromParams(p, StringNode(p.src(ctor), ctor.loc), false, false, start)
+			constructor = parseFnFromParams(p, StringNode(name, ctor.loc), false, false, true, start)
 		default:
-			// TODO: add class prop and method nodes to node.go to add modifiers.
+			computed := true
 			modifiers := p.parse_modifiers()
-			if lib.InSlice(modifiers, _default) {
-				defaultProp = p.parse_class_prop()
-			} else if p.isAt(_async) {
-				methods = append(methods, parseFunMethod(p))
+			memberModifiers = append(memberModifiers, modifiers)
+			if lib.InSlice(modifiers, K_default) {
+				defaultProp = DefaultProp{modifiers, p.parse_class_prop()}
+			} else if p.isAt(K_async) || p.isAt(K_get) || p.isAt(K_set) {
+				methods[memberCount] = parseFunMethod(p)
 			} else {
 				var NameNode *Node
-				switch p.atType(0) {
-				case O_BRACKET:
+				at := p.atType(0)
+				switch {
+				case at == O_BRACKET:
 					p.next() // [
 					NameNode = p.parseExpr(DEFAULT_BP)
 					p.expect(C_BRACKET)
-				case IDENTIFIER, STRING, NUMBER:
+				case at == IDENTIFIER:
+					computed = false
 					NameNode = parse_ident(p)
+				case p.isAt(KEYWORD):
+					computed = false
+					NameNode = parse_prop_name(p)
+				case at == STRING:
+					NameNode = parse_string(p)
+				case at == NUMBER:
+					NameNode = parse_number(p)
 				default:
 					p.expect(IDENTIFIER)
 				}
 				if p.isAt(O_PAREN) {
-					methods = append(methods, parseFnFromParams(p, NameNode, false, false, start))
+					methods[memberCount] = Member{Node: parseFnFromParams(p, NameNode, false, false, true, start), Computed: computed}
 				} else {
 					if p.isAt(EQUALS) {
 						p.next()
 						rhs := p.parseExpr(DEFAULT_BP)
-						props = append(props, &Node{
+						props[memberCount] = Member{Computed: computed, Node: &Node{
 							Tag:      T_VARDECL,
 							Children: nil,
 							Data: Decl{
@@ -931,10 +1008,21 @@ func parse_class_decl(p *ModuleParser, name string, isAnony bool, loc lib.Loc) *
 								Rhs: rhs,
 							},
 							Loc: p.loc(start, rhs.Loc),
-						})
+						}}
+					} else {
+						props[memberCount] = Member{Computed: computed, Node: &Node{
+							Tag:      T_VARDECL,
+							Children: nil,
+							Data: Decl{
+								Lhs: NameNode,
+								Rhs: nil,
+							},
+							Loc: start,
+						}}
 					}
 				}
 			}
+			memberCount++
 		}
 		p.eatSemiColons()
 	}
@@ -943,25 +1031,31 @@ func parse_class_decl(p *ModuleParser, name string, isAnony bool, loc lib.Loc) *
 		Tag:      T_CLASSDECL,
 		Children: nil,
 		Data: ClassDecl{
-			DefaultProp: defaultProp,
-			Methods:     methods,
-			Props:       props,
-			Constructor: constructor,
-			Extends:     extends,
-			Name:        name,
-			Anonymous:   isAnony,
+			DefProp:         defaultProp,
+			Methods:         methods,
+			Props:           props,
+			Constructor:     constructor,
+			Extends:         extends,
+			Name:            name,
+			Anonymous:       isAnony,
+			MemberModifiers: memberModifiers,
 		},
 		Loc: loc,
 	}
 }
 
-func (p *ModuleParser) parse_class_prop() *Node {
+func (p *ModuleParser) parse_class_prop() Member {
 	var lhs, rhs *Node
 	start := p.currLoc()
-	switch p.atType(0) {
-	case STRING, NUMBER, IDENTIFIER:
+	at := p.atType(0)
+	computed := true
+	switch {
+	case p.isAt(KEYWORD) || at == IDENTIFIER:
+		computed = false
+		lhs = parse_prop_name(p)
+	case at == STRING || at == NUMBER:
 		lhs = p.parseExpr(PRIMARY_BP)
-	case O_BRACKET:
+	case at == O_BRACKET:
 		p.next() // [
 		lhs = p.parseExpr(DEFAULT_BP)
 		p.expect(C_BRACKET)
@@ -972,7 +1066,7 @@ func (p *ModuleParser) parse_class_prop() *Node {
 		p.next()
 		rhs = p.parseExpr(DEFAULT_BP)
 	}
-	return &Node{
+	return Member{Node: &Node{
 		Tag:      T_VARDECL,
 		Children: nil,
 		Data: Decl{
@@ -980,28 +1074,28 @@ func (p *ModuleParser) parse_class_prop() *Node {
 			Rhs: rhs,
 		},
 		Loc: p.loc(start, rhs.Loc),
-	}
+	}, Computed: computed}
 }
 
 func (p *ModuleParser) parse_modifiers() (modifiers []TokenTag) {
-	if p.isAt(_private) || p.isAt(_public) {
+	if p.isAt(K_private) || p.isAt(K_public) {
 		modifiers = append(modifiers, p.eat().tag)
 	}
-	if p.isAt(_static) {
+	if p.isAt(K_static) {
 		modifiers = append(modifiers, p.eat().tag)
 	}
-	if p.isAt(_default) {
+	if p.isAt(K_default) {
 		modifiers = append(modifiers, p.eat().tag)
 	}
 	return
 }
 
 func parse_try_catch_finally(p *ModuleParser) *Node {
-	loc := p.expect(_try).loc
+	loc := p.expect(K_try).loc
 	try := p.parseBlock()
 	var catch, finally []*Node
 	var capture *Node
-	if p.isAt(_catch) {
+	if p.isAt(K_catch) {
 		p.next()
 		if p.isAt(O_PAREN) {
 			p.next()
@@ -1009,8 +1103,10 @@ func parse_try_catch_finally(p *ModuleParser) *Node {
 			p.expect(C_PAREN)
 		}
 		catch = p.parseBlock()
+	} else if p.notAt(K_finally) {
+		p.expect(K_finally)
 	}
-	if p.isAt(_finally) {
+	if p.isAt(K_finally) {
 		p.next()
 		finally = p.parseBlock()
 	}
@@ -1018,10 +1114,10 @@ func parse_try_catch_finally(p *ModuleParser) *Node {
 		Tag:      T_TRYCATCH,
 		Children: nil,
 		Data: TryCatch{
-			try:     try,
-			catch:   catch,
-			capture: capture,
-			finally: finally,
+			Try:     try,
+			Catch:   catch,
+			Capture: capture,
+			Finally: finally,
 		},
 		Loc: loc,
 	}
@@ -1032,7 +1128,7 @@ func parse_fallthrough(p *ModuleParser) *Node {
 		Tag:      T_FALLTHROUGH,
 		Children: nil,
 		Data:     nil,
-		Loc:      p.expect(_fallthrough).loc,
+		Loc:      p.expect(K_fallthrough).loc,
 	}
 }
 
@@ -1041,7 +1137,7 @@ func parse_break_stmt(p *ModuleParser) *Node {
 		Tag:      T_BREAKSTMT,
 		Children: nil,
 		Data:     nil,
-		Loc:      p.expect(_break).loc,
+		Loc:      p.expect(K_break).loc,
 	}
 }
 
@@ -1050,7 +1146,7 @@ func parse_continue_stmt(p *ModuleParser) *Node {
 		Tag:      T_CONTINUESTMT,
 		Children: nil,
 		Data:     nil,
-		Loc:      p.expect(_continue).loc,
+		Loc:      p.expect(K_continue).loc,
 	}
 }
 
@@ -1130,12 +1226,22 @@ func (p *ModuleParser) parse_params() []*Node {
 	return args
 }
 
-// parse_args, parse_grouping_expr
-func (p *ModuleParser) parse_expr_list() []*Node {
+func (p *ModuleParser) parse_args() []*Node {
 	p.expect(O_PAREN)
 	exprs := []*Node{}
 	for p.not_eof() && p.notAt(C_PAREN) {
-		exprs = append(exprs, p.parseExpr(DEFAULT_BP))
+		if p.isAt(DOT3) {
+			p.next()
+			expr := p.parseExpr(DEFAULT_BP)
+			exprs = append(exprs, &Node{
+				Tag:      T_RESTORSPREAD,
+				Children: nil,
+				Data:     expr,
+				Loc:      expr.Loc,
+			})
+		} else {
+			exprs = append(exprs, p.parseExpr(DEFAULT_BP))
+		}
 		if !p.eatComma() && p.notAt(C_PAREN) {
 			p.expect(COMMA)
 		}
@@ -1144,8 +1250,21 @@ func (p *ModuleParser) parse_expr_list() []*Node {
 	return exprs
 }
 
+// func (p *ModuleParser) parse_expr_list() []*Node {
+// 	p.expect(O_PAREN)
+// 	exprs := []*Node{}
+// 	for p.not_eof() && p.notAt(C_PAREN) {
+// 		exprs = append(exprs, p.parseExpr(DEFAULT_BP))
+// 		if !p.eatComma() && p.notAt(C_PAREN) {
+// 			p.expect(COMMA)
+// 		}
+// 	}
+// 	p.expect(C_PAREN)
+// 	return exprs
+// }
+
 func parse_globalthis(p *ModuleParser) *Node {
-	loc := p.expect(_gt).loc
+	loc := p.expect(K_gt).loc
 	return &Node{
 		Tag:      T_GT,
 		Children: nil,
@@ -1155,7 +1274,7 @@ func parse_globalthis(p *ModuleParser) *Node {
 }
 
 func parse_await_expr(p *ModuleParser) *Node {
-	start := p.expect(_await).loc
+	start := p.expect(K_await).loc
 	operand := p.parseExpr(ASSIGNMENT_BP)
 	return &Node{
 		Tag:      T_AWAIT,
@@ -1166,8 +1285,8 @@ func parse_await_expr(p *ModuleParser) *Node {
 }
 
 func parse_super_expr(p *ModuleParser) *Node {
-	start := p.expect(_super).loc
-	params := p.parse_expr_list()
+	start := p.expect(K_super).loc
+	params := p.parse_args()
 	return &Node{
 		Tag:      T_SUPER,
 		Children: params,
@@ -1177,37 +1296,36 @@ func parse_super_expr(p *ModuleParser) *Node {
 }
 
 func parse_class_expr(p *ModuleParser) *Node {
-	loc := p.expect(_class).loc
-	return parse_class_decl(p, "", true, loc)
+	loc := p.expect(K_class).loc
+	return parse_class_decl(p, AnonymousName, true, loc)
 }
 
-func parse_nullish_expr(p *ModuleParser, operand *Node, bp BindingPower) *Node {
-	p.next() // ??
-	right := p.parseExpr(bp)
-	return &Node{
-		Tag:      T_NULLISH,
-		Children: nil,
-		Data: LROpExpr{
-			Lhs: operand,
-			Rhs: right,
-		},
-		Loc: p.loc(operand.Loc, right.Loc),
-	}
+func parse_nullish_expr(p *ModuleParser, left *Node, bp BindingPower) *Node {
+	// ??
+	return parse_lrop_expr(p, bp, left, T_NULLISH)
 }
 
-func parse_instanceof_expr(p *ModuleParser, operand *Node, bp BindingPower) *Node {
+func parse_lrop_expr(p *ModuleParser, bp BindingPower, left *Node, nodeTag NodeTag) *Node {
 	p.next()
 	right := p.parseExpr(bp)
 	return &Node{
-		Tag:      T_INSTANCEOF,
+		Tag:      nodeTag,
 		Children: nil,
 		Data: LROpExpr{
-			Lhs: operand,
+			Lhs: left,
 			Rhs: right,
 			Op:  0,
 		},
-		Loc: p.loc(operand.Loc, right.Loc),
+		Loc: p.loc(left.Loc, right.Loc),
 	}
+}
+
+func parse_instanceof_expr(p *ModuleParser, left *Node, bp BindingPower) *Node {
+	return parse_lrop_expr(p, bp, left, T_INSTANCEOF)
+}
+
+func parse_in_expr(p *ModuleParser, left *Node, bp BindingPower) *Node {
+	return parse_lrop_expr(p, bp, left, T_INEXPR)
 }
 
 func parse_bitwise_expr(p *ModuleParser, operand *Node, bp BindingPower) *Node {
@@ -1331,14 +1449,15 @@ func parse_object_lit(p *ModuleParser) *Node {
 	start := p.expect(O_BRACE).loc
 	for p.not_eof() && p.notAt(C_BRACE) {
 		idx := len(keys)
-		switch p.atType(0) {
-		case IDENTIFIER:
+		at := p.atType(0)
+		switch {
+		case at == IDENTIFIER || (p.isAt(KEYWORD) && at != K_async && at != K_get && at != K_set):
 			if p.atType(1) == O_PAREN {
 				node := parseFunMethod(p)
 				keys = append(keys, node.Data.(FnDecl).Name)
-				props[idx] = ObjectProp{Node: node, Computed: false}
+				props[idx] = ObjectProp{Node: node.Node, Computed: node.Computed}
 			} else {
-				ident := parse_ident(p)
+				ident := parse_prop_name(p)
 				keys = append(keys, ident)
 				var value *Node
 				if p.notAt(COLON) {
@@ -1349,33 +1468,33 @@ func parse_object_lit(p *ModuleParser) *Node {
 				}
 				props[idx] = ObjectProp{Node: value, Computed: false, Accessor: false}
 			}
-		case STRING, NUMBER:
+		case at == STRING || at == NUMBER:
 			key := p.parseExpr(PRIMARY_BP)
 			keys = append(keys, key)
 			if p.isAt(O_PAREN) {
-				props[idx] = ObjectProp{Node: parseFnFromParams(p, key, false, false, key.Loc), Computed: false, Accessor: false}
-			} else {
-				p.expect(COLON)
-				value := p.parseExpr(DEFAULT_BP)
-				props[idx] = ObjectProp{Node: value, Computed: false, Accessor: false}
-			}
-		case O_BRACKET:
-			p.next() // [
-			key := p.parseExpr(DEFAULT_BP)
-			p.expect(C_BRACKET)
-			keys = append(keys, key)
-			if p.isAt(O_PAREN) {
-				props[idx] = ObjectProp{Node: parseFnFromParams(p, key, false, false, key.Loc), Computed: true, Accessor: false}
+				props[idx] = ObjectProp{Node: parseFnFromParams(p, key, false, false, true, key.Loc), Computed: true, Accessor: false}
 			} else {
 				p.expect(COLON)
 				value := p.parseExpr(DEFAULT_BP)
 				props[idx] = ObjectProp{Node: value, Computed: true, Accessor: false}
 			}
-		case _async:
+		case at == O_BRACKET:
+			p.next() // [
+			key := p.parseExpr(DEFAULT_BP)
+			p.expect(C_BRACKET)
+			keys = append(keys, key)
+			if p.isAt(O_PAREN) {
+				props[idx] = ObjectProp{Node: parseFnFromParams(p, key, false, false, true, key.Loc), Computed: true, Accessor: false}
+			} else {
+				p.expect(COLON)
+				value := p.parseExpr(DEFAULT_BP)
+				props[idx] = ObjectProp{Node: value, Computed: true, Accessor: false}
+			}
+		case at == K_async:
 			node := parseFunMethod(p)
 			keys = append(keys, node.Data.(FnDecl).Name)
-			props[idx] = ObjectProp{Node: node, Computed: false, Accessor: false}
-		case DOT3:
+			props[idx] = ObjectProp{Node: node.Node, Computed: node.Computed, Accessor: false}
+		case at == DOT3:
 			p.next()
 			keys = append(keys, &Node{})
 			operand := p.parse_exprs(T_OBJECT_LIT, T_IDENT, T_ARRAY_LIT)
@@ -1386,10 +1505,10 @@ func parse_object_lit(p *ModuleParser) *Node {
 				Data: operand,
 				Loc:  p.loc(start, operand.Loc),
 			}, Computed: false, Accessor: false}
-		case _get, _set:
+		case at == K_get || at == K_set:
 			fn := parseFunMethod(p)
 			keys = append(keys, fn.Data.(Accessor).Data.(FnDecl).Name)
-			props[idx] = ObjectProp{Node: fn, Computed: false, Accessor: true}
+			props[idx] = ObjectProp{Node: fn.Node, Computed: fn.Computed, Accessor: true}
 		default:
 			p.parseError(SyntaxError, "Property key expected (identifier).")
 		}
@@ -1453,14 +1572,14 @@ func parse_ternary_expr(p *ModuleParser, condition *Node, bp BindingPower) *Node
 }
 
 func parse_match_expr(p *ModuleParser) *Node {
-	loc := p.expect(_match).loc
+	loc := p.expect(K_match).loc
 	operand := p.parseCondition()
 	matches := []*Node{}
 	cases := map[NodeIndex][]*Node{}
 	var elseCase []*Node
 	p.expect(O_BRACE)
 	for p.not_eof() && p.notAt(C_BRACE) {
-		if p.isAt(_else) {
+		if p.isAt(K_else) {
 			p.next()
 			p.expect(ARROW)
 			// The match expression either returns the expression
@@ -1492,7 +1611,7 @@ func parse_match_expr(p *ModuleParser) *Node {
 }
 
 func parse_from_expr(p *ModuleParser) *Node {
-	loc := p.expect(_from).loc
+	loc := p.expect(K_from).loc
 	path := parse_string(p).Data.(string)
 	return &Node{
 		Tag:      T_FROMEXPR,
@@ -1510,15 +1629,13 @@ func (p *ModuleParser) parseScriptConcurrent(path string) (resolvedPath string) 
 			// Other module to parse.
 			path))
 		// Only parse if module has not been parsed before.
-		GlobalParser.mu.RLock()
-		needs := len(GlobalParser.Imports) == 0 || !lib.MapHas(GlobalParser.Imports, resolvedPath)
-		GlobalParser.mu.RUnlock()
+		needs := GlobalParser.Imports.Len() == 0 || !GlobalParser.Imports.Has(resolvedPath)
 		if needs {
 			GlobalParser.Go(func() {
 				newp := NewBuiltinsParser(path)
 				newp.Parse()
+				GlobalParser.Imports.Set(resolvedPath, newp.path)
 				GlobalParser.mu.Lock()
-				GlobalParser.Imports[resolvedPath] = newp.path
 				GlobalParser.Program.Modules[newp.path] = newp.OwnModule
 				GlobalParser.mu.Unlock()
 			})
@@ -1530,15 +1647,13 @@ func (p *ModuleParser) parseScriptConcurrent(path string) (resolvedPath string) 
 			resolvedPath = lib.ToLowerCase(lib.JoinPaths(lib.DirOf(lib.PathFromKey(p.path)), path))
 		}
 		// Only parse if module has not been parsed before.
-		GlobalParser.mu.RLock()
-		needs := len(GlobalParser.Imports) == 0 || !lib.MapHas(GlobalParser.Imports, resolvedPath)
-		GlobalParser.mu.RUnlock()
-		if needs {
+		shouldParse := GlobalParser.Imports.Len() == 0 || !GlobalParser.Imports.Has(resolvedPath)
+		if shouldParse {
 			GlobalParser.Go(func() {
 				newp := NewModuleParser(resolvedPath, false, false)
 				newp.Parse()
+				GlobalParser.Imports.Set(resolvedPath, newp.path)
 				GlobalParser.mu.Lock()
-				GlobalParser.Imports[resolvedPath] = newp.path
 				GlobalParser.Program.Modules[newp.path] = newp.OwnModule
 				GlobalParser.mu.Unlock()
 			})
@@ -1548,22 +1663,22 @@ func (p *ModuleParser) parseScriptConcurrent(path string) (resolvedPath string) 
 }
 
 func parse_void_expr(p *ModuleParser) *Node {
-	return parse_operand_expr(p, _void, UNARY_BP, T_VOID)
+	return parse_operand_expr(p, K_void, UNARY_BP, T_VOID)
 }
 
 func parse_typeof_expr(p *ModuleParser) *Node {
-	return parse_operand_expr(p, _typeof, UNARY_BP, T_TYPEOFEXPR)
+	return parse_operand_expr(p, K_typeof, UNARY_BP, T_TYPEOFEXPR)
 }
 
 func parse_new_expr(p *ModuleParser) *Node {
-	return parse_operand_expr(p, _new, CALL_BP, T_NEWEXPR)
+	return parse_operand_expr(p, K_new, CALL_BP-1, T_NEWEXPR)
 }
 
 func parse_async_fn_expr(p *ModuleParser) *Node {
-	if p.atType(1) == _fn {
+	if p.atType(1) == K_fn {
 		return parseFunExpr(p)
 	}
-	start := p.expect(_async).loc // async
+	start := p.expect(K_async).loc // async
 	params := p.parse_params()
 	end := p.expect(ARROW).loc
 	var body []*Node
@@ -1613,7 +1728,7 @@ func parse_member_expr(p *ModuleParser, object *Node, bp BindingPower) *Node {
 		p.expect(C_BRACKET)
 	} else {
 		p.next() // .
-		member = parse_ident(p)
+		member = parse_prop_name(p)
 	}
 	return &Node{
 		Tag:      T_MEMBER,
@@ -1629,7 +1744,7 @@ func parse_member_expr(p *ModuleParser, object *Node, bp BindingPower) *Node {
 
 func parse_call_expr(p *ModuleParser, caller *Node, bp BindingPower) *Node {
 	loc := caller.Loc
-	arguments := p.parse_expr_list()
+	arguments := p.parse_args()
 	return &Node{
 		Tag:      T_CALLEXPR,
 		Children: nil,
@@ -1712,17 +1827,39 @@ func parse_open_paren(p *ModuleParser) *Node {
 		}
 	}
 	nodes := []*Node{}
-	// TODO: add Object and Array destructuring
-	valid_params := []NodeTag{T_IDENT}
+	// TODO: enable default params
+	valid_params := []NodeTag{T_IDENT, T_ARRAY_LIT, T_OBJECT_LIT}
 	for p.notAt(C_PAREN) && p.not_eof() {
 		var expr *Node
 		if len(nodes) > 0 {
-			expr = p.parseExpr(DEFAULT_BP)
+			if p.isAt(O_BRACE) {
+				e, r := p.parse_object_or_destructuring()
+				can_parse_fn = r
+				expr = e
+			} else if p.isAt(O_BRACKET) {
+				e, r := p.parse_array_or_destructuring()
+				can_parse_fn = r
+				expr = e
+			} else {
+				expr = p.parseExpr(DEFAULT_BP)
+			}
 		} else {
-			expr = p.parseExpr(BITOR_BP)
+			if p.isAt(O_BRACE) {
+				e, r := p.parse_object_or_destructuring()
+				can_parse_fn = r
+				expr = e
+			} else if p.isAt(O_BRACKET) {
+				e, r := p.parse_array_or_destructuring()
+				can_parse_fn = r
+				expr = e
+			} else {
+				expr = p.parseExpr(BITOR_BP)
+			}
 		}
 		nodes = append(nodes, expr)
-		can_parse_fn = lib.InSlice(valid_params, expr.Tag)
+		if can_parse_fn {
+			can_parse_fn = lib.InSlice(valid_params, expr.Tag)
+		}
 		if p.isAt(BITOR) && len(nodes) == 1 {
 			return p.parseCompareList(nodes)
 		}
@@ -1819,6 +1956,22 @@ func NumberNode(num float64, loc Loc) *Node {
 	}
 }
 
+func parse_prop_name(p *ModuleParser) *Node {
+	loc := p.currLoc()
+	var tk Token
+	switch {
+	case p.isAt(KEYWORD):
+		tk = token(IDENTIFIER, p.eat().loc)
+	default:
+		tk = p.expect(IDENTIFIER)
+	}
+	return &Node{
+		Tag:  T_IDENT,
+		Data: Identifier(p.src(tk)),
+		Loc:  loc,
+	}
+}
+
 func parse_ident(p *ModuleParser) *Node {
 	loc := p.currLoc()
 	tk := p.expect(IDENTIFIER)
@@ -1859,14 +2012,8 @@ func (p *ModuleParser) parseError(errname ErrorName, additionals ...string) {
 			b.WriteString(lib.EOL)
 		}
 	}
-	lib.Print(b.String())
-	// lib.ExitWith1()
-	// exit thread instead of crashing immediately
-	// lib.Goexit()
-	GlobalParser.mu.Lock()
-	GlobalParser.errored = true
-	GlobalParser.mu.Unlock()
-	panic("Parse Error...")
+	// GlobalParser.errors.Push(b.String())
+	panic(b.String())
 }
 
 func (p *ModuleParser) not_eof() bool {
@@ -1929,6 +2076,8 @@ func (p *ModuleParser) isAt(t TokenTag) bool {
 		return currT > binary_op_start && currT < binary_op_end
 	case ACCESSOR:
 		return currT > accessor_start && currT < accessor_end
+	case KEYWORD:
+		return currT > keyword_start && currT < keyword_end
 	}
 	return currT == t
 }

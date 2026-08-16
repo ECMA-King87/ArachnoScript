@@ -11,6 +11,7 @@ const (
 	LOGICAL_OR_BP
 	LOGICAL_AND_BP
 	NULLISH_COALLESCE_BP
+	IN_BP
 	BITOR_BP
 	BITXOR_BP
 	BITAND_BP
@@ -128,6 +129,7 @@ func initNodeTags() {
 		T_SUPER:        "Super Call",
 		T_AWAIT:        "Await Expr",
 		T_UNARY:        "Unary Expr",
+		T_INEXPR:       "In Expr",
 		T_LABEL:        "Label Stmt",
 		T_THROW:        "Throw Stmt",
 		T_FNDECL:       "Fun Decl",
@@ -143,6 +145,7 @@ func initNodeTags() {
 		T_BREAKSTMT:    "Break Stmt",
 		T_CONTINUESTMT: "Continue Stmt",
 		T_ACCESSOR:     "Function Decl",
+		T_CLASSPROP:    "Var Decl",
 	}
 }
 
@@ -187,6 +190,7 @@ const (
 	T_RESTORSPREAD
 	T_SUPER
 	T_AWAIT
+	T_INEXPR
 	T_YIELDSTMT
 	T_UNARY
 	T_LABEL
@@ -205,6 +209,7 @@ const (
 	T_BREAKSTMT
 	T_CONTINUESTMT
 	T_ACCESSOR
+	T_CLASSPROP
 )
 
 type Program struct {
@@ -213,8 +218,9 @@ type Program struct {
 }
 
 type Module struct {
-	Path int
-	Body []*Node
+	Path    int
+	Body    []*Node
+	Invalid bool
 }
 
 type Node struct {
@@ -227,10 +233,6 @@ type Node struct {
 // -----------------------------------
 // type Number float64
 type Identifier string
-
-type NewExpr struct {
-	Operand *Node
-}
 
 type TernaryExpr struct {
 	Condition *Node
@@ -303,7 +305,7 @@ type ObjectLiteral struct {
 }
 
 type MatchExpr struct {
-	Operand *Node
+	Operand Condition
 	Cases   map[NodeIndex][]*Node
 	Matches []*Node
 	Else    []*Node
@@ -330,8 +332,12 @@ type VarDecl struct {
 	Decls []Decl
 }
 
+type Condition struct {
+	Decl, Node *Node
+}
+
 type IfStmt struct {
-	Condition *Node
+	Condition Condition
 	ElseBlock []*Node
 }
 
@@ -346,7 +352,7 @@ type FnDecl struct {
 type WhileLoop struct {
 	Do        bool
 	Body      []*Node
-	Condition *Node
+	Condition Condition
 }
 
 type TForLoop struct {
@@ -370,7 +376,7 @@ type ForLoop struct {
 type SwitchStmt struct {
 	Condition *Node
 	Cases     map[NodeIndex][]*Node
-	Matches   []*Node
+	Matches   [][]*Node
 	Default   []*Node
 }
 
@@ -385,21 +391,32 @@ type ExportStmt struct {
 	Exp *Node
 }
 
+type DefaultProp struct {
+	Modifiers []TokenTag
+	Member
+}
+
+type Member struct {
+	Computed bool
+	*Node
+}
+
 type ClassDecl struct {
-	Anonymous   bool
-	DefaultProp *Node
-	Methods     []*Node
-	Props       []*Node
-	Constructor *Node
-	Extends     *Node
-	Name        string
+	Anonymous       bool
+	DefProp         DefaultProp
+	Methods         map[int]Member
+	Props           map[int]Member
+	MemberModifiers [][]TokenTag
+	Constructor     *Node
+	Extends         *Node
+	Name            string
 }
 
 type TryCatch struct {
-	try     []*Node
-	catch   []*Node
-	capture *Node
-	finally []*Node
+	Try     []*Node
+	Catch   []*Node
+	Capture *Node
+	Finally []*Node
 }
 
 type Accessor struct {

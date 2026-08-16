@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 )
 
+const ListSeparator = filepath.ListSeparator
+const Separator = filepath.Separator
+
 func IsLocalPath(path string) bool { return filepath.IsLocal(path) }
 
 func LocalizePath(path string) (string, error) { return filepath.Localize(path) }

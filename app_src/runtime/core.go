@@ -118,10 +118,8 @@ func (w *Worker) crash() {
 	// lib.Goexit()
 }
 
-var UndefinedHash = hashValue(undefined)
-
 var globalThis = func() *ScopeObject {
-	scopeObject := &ScopeObject{NewScope(nil, UndefinedHash, GlobalScope, 0), null}
+	scopeObject := &ScopeObject{NewScope(nil, undefined, GlobalScope, 0), null}
 	scopeObject.init(NullStr, null, ConstDecl, lib.DumbyLoc)
 	scopeObject.init(UndefinedStr, undefined, ConstDecl, lib.DumbyLoc)
 	scopeObject.init(TrueStr, True, ConstDecl, lib.DumbyLoc)
@@ -133,29 +131,35 @@ var globalThis = func() *ScopeObject {
 	return scopeObject
 }()
 
+// exports == nil when prog.Invalid == true
 func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
+	if prog.Invalid {
+		return
+	}
+	exports = NewObject()
 	defer func() {
-		err := recover()
-		if err != nil {
-			lib.Println(err)
+		if !lib.DEBUG_MODE {
+			err := recover()
+			if err != nil {
+				lib.Println(err)
+			}
 		}
 	}()
 	if w.progCtx == nil {
-		progScope := NewScope(globalThis.Scope, UndefinedHash, ModuleScope, 0)
+		progScope := NewScope(globalThis.Scope, undefined, ModuleScope, 0)
 		progScope.path = prog.Path
 		progScope.worker = w
 		w.progCtx = NewContext(progScope)
 	}
 	ctx := w.progCtx
 	progLen := len(prog.Body)
-	exports = NewObject()
 	for i := 0; i < progLen && ctx.valid; i++ {
 		node := prog.Body[i]
 		var val Value = undefined
 		switch node.Tag {
 		case parser.T_IMPORT:
 			stmt := node.Data.(parser.ImportStmt)
-			key := parser.GlobalParser.Imports[stmt.From]
+			key := parser.GlobalParser.Imports.GetS(stmt.From)
 			if prog.Path == key {
 				ctx.errorWithSource(Error, 0, node.Loc, "This module imports itself.")
 			}
@@ -164,9 +168,17 @@ func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 			if stmt.UseCurrentContext {
 				worker := newWorker(w.runtime, false)
 				exps := worker.ExecModule(module)
+				if exps == nil {
+					exports = nil
+					prog.Invalid = true
+					return
+				}
 				// w.progCtx.names.Copy(worker.progCtx.names)
 				worker.progCtx.names.ForEach(func(name *String, ptr int, _ bool) {
 					varType, _ := worker.progCtx.varTypes.Get(name)
+					if name == ThisStr {
+						return
+					}
 					w.progCtx.init(name, worker.progCtx.memory[ptr], varType, node.Loc)
 				})
 				exports.own.Copy(exps.own)
@@ -203,6 +215,8 @@ func (w *Worker) ExecModule(prog *parser.Module) (exports *Object) {
 			}
 		case parser.T_EXPORT:
 			ctx.errorWithSource(BuildError, 0, node.Loc, "Export statements unimplemented.")
+		case parser.T_RETURN:
+			ctx.errorWithSource(SyntaxError, 0, node.Loc, "A 'return' statement can only be used within a function body.")
 		case parser.T_LABEL:
 			ctx.EvalLabel(&i, node, prog.Body)
 		default:
@@ -226,7 +240,7 @@ func (ctx *EvalContext) ExecBlock(block []Node) (terminate, cont, br bool) {
 			rtv = ctx.EvalStmt(node)
 		}
 		if ctx.terminate {
-			terminate = ctx.terminate
+			terminate = true
 			if (ctx.of == SwitchScope || ctx.of == LoopScope) && (ctx._break || ctx._continue) {
 				br = ctx._break
 				cont = ctx._continue
@@ -246,7 +260,7 @@ func (ctx *EvalContext) ExecBlock(block []Node) (terminate, cont, br bool) {
 var benchmarkCount int
 
 func (ctx *EvalContext) EvalLabel(i *int, node Node, block []Node) *Undefined {
-	*i++
+	(*i)++
 	label := node.Data.(string)
 	if *i >= len(block) {
 		ctx.errorWithSource(SyntaxError, 0, node.Loc, "A label must precede a statement.", lib.EOL,
@@ -319,14 +333,35 @@ func (ctx *EvalContext) EvalStmt(node Node) Value {
 		return ctx.evalSwitchStmt(node)
 	case parser.T_THROW:
 		return ctx.evalThrowStmt(node)
+	case parser.T_CLASSDECL:
+		return ctx.evalClassDecl(node)
+	case parser.T_TRYCATCH:
+		return ctx.evalTryCatchFinally(node)
+	case parser.T_FORLOOP:
+		return ctx.evalForLoop(node)
 	default:
 		return ctx.EvalExpr(node)
 	}
 	return null
 }
 
+// func (ctx *EvalContext) EvalPrimitive(node Node) Value {
+// 	switch value := ctx.EvalExpr(node).(type) {
+// 	case *Instance, *Object:
+// 		this, desc, found := lookupProp(valToObjectCast(value), ToPrimitiveTagKey, nil)
+// 		if !found {
+// 			return value
+// 		}
+// 		if member, ok := desc.value.(*Function); ok {
+// 			return ctx.callWithThis(member, this, Args{}, &node.Loc)
+// 		}
+// 		return value
+// 	default:
+// 		return value
+// 	}
+// }
+
 func (ctx *EvalContext) EvalExpr(node Node) Value {
-	var scope *Scope = ctx.Scope
 	switch node.Tag {
 	case parser.T_NUMBER:
 		return ctx.evalNumber(node.Data.(float64))
@@ -355,7 +390,7 @@ func (ctx *EvalContext) EvalExpr(node Node) Value {
 	case parser.T_COMPARE_LIST:
 		return ctx.evalCompareList(node)
 	case parser.T_RESTORSPREAD:
-		scope.errorWithSource(SyntaxError, 0, node.Loc, "'...' is unexpected here.")
+		ctx.errorWithSource(SyntaxError, 0, node.Loc, "'...' is unexpected here.")
 	case parser.T_GROUPING:
 		return ctx.evalGroupingExpr(node)
 	case parser.T_FNDECL:
@@ -374,8 +409,16 @@ func (ctx *EvalContext) EvalExpr(node Node) Value {
 		return ctx.evalIncreExpr(node)
 	case parser.T_LOGICAL:
 		return ctx.evalLogicalExpr(node)
+	case parser.T_CLASSDECL:
+		return ctx.evalClassDecl(node)
+	case parser.T_NEWEXPR:
+		return ctx.evalNewExpr(node)
+	case parser.T_SUPER:
+		return ctx.evalSuperExpr(node)
+	case parser.T_INEXPR:
+		return ctx.evalInExpr(node)
 	default:
-		scope.errorWithSource(BuildError, 0, node.Loc, "Unhandled AST node.")
+		ctx.errorWithSource(BuildError, 0, node.Loc, "Unhandled AST node.")
 	}
 	return null
 }
@@ -388,26 +431,26 @@ type (
 		ids    map[uintptr]int  // permanent ids for refs
 		cyclic map[uintptr]bool // objects that participate in cycles
 		nextID int
+		worker *Worker
 	}
 )
 
-func NewValueInspector() ValueInspector {
+func NewValueInspector(worker *Worker) ValueInspector {
 	return ValueInspector{
 		stack:  make(Visited),
 		ids:    make(map[uintptr]int),
 		cyclic: make(map[uintptr]bool),
+		nextID: 0,
+		worker: worker,
 	}
 }
 
 func (w *Worker) Inspect(obj Value) string {
-	inspector := NewValueInspector()
-	inspector.Analyze(obj)
+	inspector := NewValueInspector(w)
+	inspector.walk(obj)
 	return obj.inspect(0, inspector)
 }
 
-func (i *ValueInspector) Analyze(v Value) {
-	i.walk(v)
-}
 func (i *ValueInspector) walk(v Value) {
 	if v == nil {
 		return
@@ -468,6 +511,33 @@ func (i *ValueInspector) walkObject(obj *Object) {
 	})
 }
 
+func newStackTrace(n int, ctx *EvalContext) *String {
+	stackLen := ctx.callstack.Len()
+	if n == 0 || stackLen == 0 {
+		return &emptyString
+	}
+	b := lib.NewStringBuilder()
+	fn := ctx.callstack.At(-1)
+	b.WriteString(lib.SourceWithinRange(fn.callEnvPath, fn.callEnvLoc))
+	sliced := ctx.callstack.Slice(max(0, stackLen-n), n)
+	arrLen := sliced.Len()
+	for idx := -1; idx+arrLen >= 0; idx-- {
+		cf := sliced.At(idx)
+		path := lib.PathFromKey(cf.callEnvPath)
+		dirPath := lib.DirOf(path)
+		dir, err := lib.LocalizePath(dirPath)
+		if err != nil {
+			dir = dirPath
+		}
+		b.WriteString(lib.Sprintf("\tat %s (%s%s:\x1b[33m%d\x1b[0m:\x1b[33m%d\x1b[0m)%s",
+			lib.Bold(lib.Italic(cf.fn.name)),
+			lib.Dull(dir+string(lib.Separator)),
+			lib.Cyan(lib.BaseName(path)),
+			cf.callEnvLoc.Line, cf.callEnvLoc.Col, lib.EOL))
+	}
+	return NewString(b.String())
+}
+
 type CMP_OP lib.Enum
 
 const (
@@ -497,13 +567,15 @@ func compareVals(a Value, b Value, op CMP_OP) bool {
 				return a.(*Symbol).description == b.(*Symbol).description
 			case UndefinedType:
 				return true
-			case ClassType, FunctionType, MacroType:
+			case ClassType, FunctionType, MacroType, ScopeType:
 				// Compare Identity (pointers)
 				return a == b
 			case ObjectType, ArrayType, InstanceType:
 				if getValueHash(a) != getValueHash(b) {
 					return false
 				}
+				return lib.DeepEqual(a, b)
+			case RawType:
 				return lib.DeepEqual(a, b)
 			}
 		}
@@ -562,8 +634,12 @@ func hashValue(a Value) uintptr {
 		if v.hash == 0 {
 			v.elements.ForEach(func(i int, el Value) {
 				v.hash += hashValue(Number(i))
-				v.hash += getValueHash(el)
-				v.hash *= HashSeed
+				if el == v {
+					v.hash += uintptr(lib.Pointer(v))
+				} else {
+					v.hash += getValueHash(el)
+					v.hash *= HashSeed
+				}
 			})
 		}
 		hash = v.hash

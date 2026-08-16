@@ -25,65 +25,67 @@ const (
 	C_BRACKET
 	DOT3
 
-	// keywords
+	KEYWORD
+	keyword_start
 	DECL
 	decl_keyword_start
-	_fn
-	_class
+	K_fn
+	K_class
 	VARDECL
 	var_decl_keyword_start
-	_let
-	_var
-	_const
+	K_let
+	K_var
+	K_const
 	var_decl_keyword_end
 	decl_keyword_end
 	// modifiers
-	_static
-	_public
-	_private
+	K_static
+	K_public
+	K_private
 
-	_extends
-	_async
-	_await
-	_try
-	_catch
-	_finally
+	K_extends
+	K_async
+	K_await
+	K_try
+	K_catch
+	K_finally
 
-	_if
-	_else
-	_while
-	_break
-	_continue
-	_do
-	_for
-	_typeof
-	_from
-	_import
-	_export
-	_return
-	_throw
-	_of
-	_in
-	_default
-	_switch
-	_case
-	_super
-	_new
-	_match
-	_ctor
+	K_if
+	K_else
+	K_while
+	K_break
+	K_continue
+	K_do
+	K_for
+	K_typeof
+	K_from
+	K_import
+	K_export
+	K_return
+	K_throw
+	K_of
+	K_in
+	K_default
+	K_switch
+	K_case
+	K_super
+	K_new
+	K_match
+	K_ctor
 
 	ACCESSOR
 	accessor_start
-	_get
-	_set
+	K_get
+	K_set
 	accessor_end
 
-	_fallthrough
-	_void
-	_instanceof
+	K_fallthrough
+	K_void
+	K_instanceof
 	// globalThis
-	_gt
-	_yield
+	K_gt
+	K_yield
+	keyword_end
 
 	BINARYOP
 	binary_op_start
@@ -230,51 +232,51 @@ func initLexemes() {
 		BITCLEAR_EQUALS: "&^=",
 
 		// keywords
-		_fn:      "keyword",
-		_class:   "keyword",
-		_let:     "keyword",
-		_var:     "keyword",
-		_const:   "keyword",
-		_static:  "keyword",
-		_public:  "keyword",
-		_private: "keyword",
-		_extends: "keyword",
-		_async:   "keyword",
-		_await:   "keyword",
-		_try:     "keyword",
-		_catch:   "keyword",
-		_finally: "keyword",
-		DECL:     "declaration keyword",
-		VARDECL:  "variable declaration keyword",
+		K_fn:      "keyword",
+		K_class:   "keyword",
+		K_let:     "keyword",
+		K_var:     "keyword",
+		K_const:   "keyword",
+		K_static:  "keyword",
+		K_public:  "keyword",
+		K_private: "keyword",
+		K_extends: "keyword",
+		K_async:   "keyword",
+		K_await:   "keyword",
+		K_try:     "keyword",
+		K_catch:   "keyword",
+		K_finally: "keyword",
+		DECL:      "declaration keyword",
+		VARDECL:   "variable declaration keyword",
 
-		_if:          "keyword",
-		_else:        "keyword",
-		_while:       "keyword",
-		_break:       "keyword",
-		_continue:    "keyword",
-		_do:          "keyword",
-		_for:         "keyword",
-		_typeof:      "keyword",
-		_from:        "keyword",
-		_import:      "keyword",
-		_export:      "keyword",
-		_return:      "keyword",
-		_throw:       "keyword",
-		_of:          "keyword",
-		_in:          "keyword",
-		_default:     "keyword",
-		_switch:      "keyword",
-		_case:        "keyword",
-		_super:       "keyword",
-		_new:         "keyword",
-		_match:       "keyword",
-		_ctor:        "keyword",
-		_get:         "keyword",
-		_set:         "keyword",
-		_fallthrough: "keyword",
-		_void:        "keyword",
-		_instanceof:  "keyword",
-		_gt:          "keyword",
+		// K_if:          "keyword",
+		// K_else:        "keyword",
+		// K_while:       "keyword",
+		// K_break:       "keyword",
+		// K_continue:    "keyword",
+		// K_do:          "keyword",
+		// K_for:         "keyword",
+		// K_typeof:      "keyword",
+		// K_from:        "keyword",
+		// K_import:      "keyword",
+		// K_export:      "keyword",
+		// K_return:      "keyword",
+		// K_throw:       "keyword",
+		// K_of:          "keyword",
+		// K_in:          "keyword",
+		// K_default:     "keyword",
+		// K_switch:      "keyword",
+		// K_case:        "keyword",
+		// K_super:       "keyword",
+		// K_new:         "keyword",
+		// K_match:       "keyword",
+		// K_ctor:        "keyword",
+		// K_get:         "keyword",
+		// K_set:         "keyword",
+		// K_fallthrough: "keyword",
+		// K_void:        "keyword",
+		// K_instanceof:  "keyword",
+		// K_gt:          "keyword",
 	}
 	for _, t := range keywords {
 		lexemes[t] = "keyword"
@@ -282,54 +284,54 @@ func initLexemes() {
 }
 
 var keywords = map[string]TokenTag{
-	"function": _fn,
-	"class":    _class,
-	"private":  _private,
-	"public":   _public,
-	"static":   _static,
-	"extends":  _extends,
-	"let":      _let,
-	"var":      _var,
-	"const":    _const,
-	"async":    _async,
-	"await":    _await,
-	"try":      _try,
-	"catch":    _catch,
-	"finally":  _finally,
+	"function": K_fn,
+	"class":    K_class,
+	"private":  K_private,
+	"public":   K_public,
+	"static":   K_static,
+	"extends":  K_extends,
+	"let":      K_let,
+	"var":      K_var,
+	"const":    K_const,
+	"async":    K_async,
+	"await":    K_await,
+	"try":      K_try,
+	"catch":    K_catch,
+	"finally":  K_finally,
 
-	"if":          _if,
-	"else":        _else,
-	"while":       _while,
-	"break":       _break,
-	"continue":    _continue,
-	"do":          _do,
-	"for":         _for,
-	"typeof":      _typeof,
-	"from":        _from,
-	"import":      _import,
-	"export":      _export,
-	"return":      _return,
-	"throw":       _throw,
-	"of":          _of,
-	"in":          _in,
-	"default":     _default,
-	"switch":      _switch,
-	"case":        _case,
-	"super":       _super,
-	"new":         _new,
-	"match":       _match,
-	"constructor": _ctor,
-	"get":         _get,
-	"set":         _set,
-	"fallthrough": _fallthrough,
-	"void":        _void,
-	"instanceof":  _instanceof,
-	"globalThis":  _gt,
-	"yield":       _yield,
+	"if":          K_if,
+	"else":        K_else,
+	"while":       K_while,
+	"break":       K_break,
+	"continue":    K_continue,
+	"do":          K_do,
+	"for":         K_for,
+	"typeof":      K_typeof,
+	"from":        K_from,
+	"import":      K_import,
+	"export":      K_export,
+	"return":      K_return,
+	"throw":       K_throw,
+	"of":          K_of,
+	"in":          K_in,
+	"default":     K_default,
+	"switch":      K_switch,
+	"case":        K_case,
+	"super":       K_super,
+	"new":         K_new,
+	"match":       K_match,
+	"constructor": K_ctor,
+	"get":         K_get,
+	"set":         K_set,
+	"fallthrough": K_fallthrough,
+	"void":        K_void,
+	"instanceof":  K_instanceof,
+	"globalThis":  K_gt,
+	"yield":       K_yield,
 }
 
 // var unreserved = []TokenTag{
-// 	_catch,
+// 	K_catch,
 // }
 
 func (tag TokenTag) Lexeme() string {

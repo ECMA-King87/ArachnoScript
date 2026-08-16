@@ -5,7 +5,11 @@ import (
 	"sync"
 )
 
-type WaitGroup = sync.WaitGroup
+type (
+	WaitGroup = sync.WaitGroup
+	RWMutex   = sync.RWMutex
+	Mutex     = sync.Mutex
+)
 
 var wg WaitGroup
 

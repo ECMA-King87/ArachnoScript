@@ -164,3 +164,7 @@ func IsValidIdentifier(s string) bool {
 
 	return true
 }
+
+func StrContains(str, subs string) bool {
+	return strings.Contains(str, subs)
+}

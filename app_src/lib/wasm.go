@@ -10,18 +10,18 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
-type WebAssembly struct {
+type WebAssemblyRuntime struct {
 	ctx     context.Context
 	runtime wazero.Runtime
 }
 
-func (wasm *WebAssembly) Close() {
+func (wasm *WebAssemblyRuntime) Close() {
 	wasm.runtime.Close(wasm.ctx)
 }
 
 type Instance struct {
 	inst    api.Module
-	runtime *WebAssembly
+	runtime *WebAssemblyRuntime
 }
 
 // Close closes the resource.
@@ -41,7 +41,7 @@ func (i Instance) IsClosed() bool {
 
 type Module struct {
 	name    string
-	runtime *WebAssembly
+	runtime *WebAssemblyRuntime
 	module  wazero.CompiledModule
 }
 
@@ -53,7 +53,7 @@ func (m Module) Close() {
 
 type Function struct {
 	f       api.Function
-	runtime *WebAssembly
+	runtime *WebAssemblyRuntime
 }
 
 // Call invokes the function with the given parameters and returns any results or an error for any failure looking up or invoking the function.
@@ -126,7 +126,7 @@ func GetWASMExport(instance Instance, name string) (fun Function, found bool) {
 
 // Compiles and instantiates the wasm binary.
 // Prefer to use WASMCompileModule then WASMInstantiateModule to Instantiate
-func WASMInstantiate(wasm *WebAssembly, src []byte) (Instance, error) {
+func WASMInstantiate(wasm *WebAssemblyRuntime, src []byte) (Instance, error) {
 	inst, err := wasm.runtime.Instantiate(wasm.ctx, src)
 	return Instance{
 		inst:    inst,
@@ -143,17 +143,17 @@ func WASMInstantiateModule(mod Module) (Instance, error) {
 	}, err
 }
 
-func NewWASMRuntime() *WebAssembly {
+func NewWASMRuntime() *WebAssemblyRuntime {
 	ctx := context.Background()
 	runtime := wazero.NewRuntime(ctx)
-	return &WebAssembly{
+	return &WebAssemblyRuntime{
 		ctx:     ctx,
 		runtime: runtime,
 	}
 }
 
 // Prefer to use WASMCompileModule then WASMInstantiateModule to Instantiate
-func WASMCompileModule(wasm *WebAssembly, wasmBytes []byte) (Module, error) {
+func WASMCompileModule(wasm *WebAssemblyRuntime, wasmBytes []byte) (Module, error) {
 	module, err := wasm.runtime.CompileModule(wasm.ctx, wasmBytes)
 	return Module{
 		name:    module.Name(),

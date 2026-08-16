@@ -28,59 +28,51 @@ func SourceAtPosition(path string, loc Loc) string {
 	return Sprintf("at (\x1b[34m%s\x1b[33m:%d:%d\x1b[0m)%s", path, loc.Line, loc.Col, EOL)
 }
 
-// path: is either path to file or a source
+// path: is the cached file key for source lookup
 //
-// line: line in source to start from
-//
-// pos:  position of character to put "^" under
-//
-// count: the length of the token or the number of times to repeat "^"
-//
-// chars: limit the number of characters to be displayed on a line
-//
-// _range: number of lines from [line] to display
+// loc: the source location to highlight
 func SourceWithinRange(
 	path int,
 	loc Loc,
 ) string {
 	var lines []string = SplitStr(string(ReadCachedFile(path)), "\n")
 	count := min(loc.End-loc.Start, 500)
-	sourceAtRange := ""
-	for i := range lines {
-		index := uintptr(i)
-		if len(sourceAtRange) > 0 {
-			// the range has already been taken
-			break
-		}
-		line := TrimStr(lines[index])
-		if index+1 == loc.Line {
-			line_source := NewStringBuilder()
-			leading_source := Sprintf("\x1b[33;1m%d |\x1b[0m  ", loc.Line)
-			distance := int(loc.Col-1) + VisibleLen(leading_source) - (len(lines[index]) - len(line))
-			line_source.WriteString(Repeat(" ", distance))
-			// ---------------- ^ ----------------
-			// TODO: This will not go well with multiline source, so find a solution.
-			line_source.WriteString("\x1b[31m")
-			line_source.WriteString(Repeat("^", int(count)))
-			line_source.WriteString("\x1b[0m")
-			// -----------------------------------
-			line_source.WriteString(EOL)
-			line_source.WriteString(Repeat(" ", distance))
-			line_source.WriteString("\x1b[34m")
-			line_source.WriteString(Sprintf("%d", loc.Col))
-			line_source.WriteString("\x1b[0m")
-			line_source.WriteString(EOL)
-			sourceAtRange = Sprintf("%s%s%s%s", leading_source, line, EOL, line_source.String())
-		}
-		if index+1 > loc.Line {
-			sourceAtRange += EOL + line
-		}
+	if loc.Line == 0 || loc.Line > uintptr(len(lines)) {
+		return Sprintf("at (\x1b[34m%s\x1b[0m)%s", PathFromKey(path), EOL)
 	}
-	return sourceAtRange + Sprintf("at (\x1b[34m%s\x1b[0m)%s", PathFromKey(path), EOL)
+
+	index := int(loc.Line - 1)
+	line := lines[index]
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+
+	leading_source := Sprintf("\x1b[33;1m%d |\x1b[0m  ", loc.Line)
+	distance := max(int(loc.Col-1)+VisibleLen(leading_source), 0)
+
+	line_source := NewStringBuilder()
+	line_source.WriteString(Repeat(" ", distance))
+	line_source.WriteString("\x1b[31m")
+	line_source.WriteString(Repeat("^", int(count)))
+	line_source.WriteString("\x1b[0m")
+	line_source.WriteString(EOL)
+	line_source.WriteString(Repeat(" ", distance))
+	line_source.WriteString("\x1b[34m")
+	line_source.WriteString(Sprintf("%d", loc.Col))
+	line_source.WriteString("\x1b[0m")
+	line_source.WriteString(EOL)
+
+	return Sprintf(
+		"%s%s%s%s",
+		leading_source,
+		line,
+		EOL,
+		line_source.String(),
+	)
 }
 
 func DebugMsg(path int, loc Loc) string {
-	return SourceWithinRange(path, loc)
+	return SourceWithinRange(path, loc) + Sprintf("at (%s)%s", Blue(PathFromKey(path)), EOL)
 }
 
 func VisibleLen(str string) int {
@@ -145,10 +137,24 @@ func IsString(val reflect.Value) bool {
 	return val.Kind() == reflect.String
 }
 
+func IsMap(val reflect.Value) bool {
+	return val.Kind() == reflect.Map
+}
+
+func IsChan(val reflect.Value) bool {
+	return val.Kind() == reflect.Chan
+}
+
 func ValueOf(v any) reflect.Value {
 	val := reflect.ValueOf(v)
 	return val
 }
+
+// Append appends the values x to a slice s and returns the resulting slice. As in Go, each x's value must be assignable to the slice's element type.
+func AppendValue(s reflect.Value, x ...reflect.Value) reflect.Value { return reflect.Append(s, x...) }
+
+// AppendSlice appends a slice t to a slice s and returns the resulting slice. The slices s and t must have the same element type.
+func AppendSlice(s reflect.Value, t reflect.Value) reflect.Value { return reflect.AppendSlice(s, t) }
 
 // func ReflectSet(x, v any) {
 // 	v1 := reflect.ValueOf(x)

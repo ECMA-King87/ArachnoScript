@@ -15,6 +15,12 @@ func Pow(b, p float64) float64 {
 
 // Evaluates a % b or a modulus b
 // which is the floating-point remainder of a/b
+// Special cases:
+// Modulo(±Inf, y) = NaN
+// Modulo(NaN, y) = NaN
+// Modulo(x, 0) = NaN
+// Modulo(x, ±Inf) = x
+// Modulo(x, NaN) = NaN
 func Modulo(a, b float64) float64 {
 	return math.Mod(a, b)
 }

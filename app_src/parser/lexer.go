@@ -65,7 +65,7 @@ func (l *Lexer) Loc() lib.Loc {
 		Line:  l.line,
 		Col:   l.col,
 		Start: l.pos,
-		End:   l.pos,
+		End:   l.pos + 1,
 	}
 }
 
@@ -79,6 +79,7 @@ func (l *Lexer) Tokenize() []Token {
 	l.push(Token{tag: EOF, loc: l.Loc()})
 	return l.tokens
 }
+
 func (l *Lexer) advance(n int) {
 	// advance n runes
 	for range n {
@@ -125,6 +126,7 @@ const (
 	UnclosedString                        = "Unterminated string literal."
 	_InNumberMustSeparateSuccessiveDigits = "'_' in number literal must separate successive digits."
 	UnexpectedEOT                         = "Unexpected end of text."
+	OctalLiteralsAreNotAllowed            = "Octal literals are not allowed. Use the syntax '0o123'."
 )
 
 func (l *Lexer) handleChar(b rune) {
@@ -530,6 +532,7 @@ func (l *Lexer) handleQuote() {
 func (l *Lexer) handleNumber() {
 	startToken(l)
 	if l.char() == '0' {
+		zero := l.Loc()
 		l.advance(1)
 		switch l.char() {
 		case 'x', 'X':
@@ -552,7 +555,7 @@ func (l *Lexer) handleNumber() {
 			}
 			return
 		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '_':
-			l.lexError(SyntaxError, "Octal literals are not allowed. Use the syntax '0o123'.")
+			l.lexError(SyntaxError, OctalLiteralsAreNotAllowed)
 			return
 		case '.':
 			l.advance(1)
@@ -561,7 +564,7 @@ func (l *Lexer) handleNumber() {
 		default:
 			// Just "0", or "0" followed by invalid char
 			// endToken(l)
-			l.push(token(NUMBER, l.loc))
+			l.push(token(NUMBER, zero))
 			return
 		}
 	}
