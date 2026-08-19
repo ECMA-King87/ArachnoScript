@@ -298,7 +298,7 @@ func (ctx *EvalContext) EvalLabel(i *int, node Node, block []Node) *Undefined {
 			t := lib.TimeNow()
 			ctx.EvalStmt(labeled)
 			d := lib.TimeSince(t)
-			lib.Stdout.WriteString("Benchmark " + lib.Sprint(id) + "took ")
+			lib.Stdout.WriteString("Benchmark " + lib.Sprint(id) + " took ")
 			lib.Stdout.WriteString(d.String() + "." + lib.EOL)
 		}
 	default:

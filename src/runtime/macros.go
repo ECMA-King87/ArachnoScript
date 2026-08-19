@@ -966,29 +966,19 @@ func valToObjectCast(arg Value) *Object {
 		return obj
 	case *RAW:
 		obj := NewObject()
-		switch g := v.value.(type) {
-		case map[string]any:
-			for k, v := range g {
-				obj.set(NewString(k), valToObjectCast(&RAW{v}))
+		val := lib.ValueOf(v.value)
+		switch {
+		case lib.IsMap(val):
+			m := val.MapRange()
+			for m.Next() {
+				obj.set(NewString(lib.Sprint(m.Key().Interface())), valToObjectCast(&RAW{m.Value().Interface()}))
 			}
-		case map[string][]any:
-			for k, v := range g {
-				obj.set(NewString(k), valToObjectCast(&RAW{v}))
+		case lib.IsSlice(val) || lib.IsArray(val) || lib.IsString(val):
+			idx := 0
+			for el := range val.Seq() {
+				obj.set(NewString(lib.Sprint(idx)), valToObjectCast(&RAW{el.Interface()}))
+				idx++
 			}
-		case map[int]any:
-			for k, v := range g {
-				obj.set(NewString(lib.Sprint(k)), valToObjectCast(&RAW{v}))
-			}
-		case map[int][]any:
-			for k, v := range g {
-				obj.set(NewString(lib.Sprint(k)), valToObjectCast(&RAW{v}))
-			}
-		case []any:
-			for k, v := range g {
-				obj.set(NewString(lib.Sprint(k)), valToObjectCast(&RAW{v}))
-			}
-		default:
-			obj.defaultVal = v
 		}
 		return obj
 	case *ScopeObject:
