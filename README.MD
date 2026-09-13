@@ -1,7 +1,7 @@
 ‎# ArachnoScript
 
 ‎This repository contains the source and the releases of the ArachnoScript Runtime Environment from v0.2.5 and until v0.3.0.
-‎This repository also contains documentations of the runtime, language macros, and code examples.
+This repository also contains documentations of the runtime, language macros, and code examples.
 
 ‎## The Language
 
