@@ -1,4 +1,3 @@
-
 ‎# ArachnoScript
 ‎
 ‎This repository contains the source and the releases of the ArachnoScript Runtime Environment from v0.2.5 and until v0.3.0.
@@ -45,6 +44,7 @@
 ‎
 ‎- Studying the runtime and testing it for yourself or even using the language and issuing bug reports will help to catch bugs and flaws in both the language, the semantics, and the runtime. You may even help add and remove language features that may or may not suit developers needs. You'll help shape the language's future!
 ‎- Join one of these social platforms and follow the journey.
+
 ‎1. [Discord](https://discord.gg/nQm7v2eXWt)
 ‎2. [Buzzly](https://buzzly.harislab.tech)
 ‎3. [Facebook: ECMA King](https://m.facebook.com/ecmaking57)
