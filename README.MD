@@ -17,7 +17,7 @@
 ‎It currently executes ArachnoScript code using an interpreter.
 ‎The ArachnoScript runtime is written in the Go programming language, speeding up the development of the runtime, also making cross compilation easy.
 
-‎## v0.2.5
+## v0.2.5
 
 ‎This version of the runtime marks a significant milestone in its development.
 ‎Several improvements and performance boosts were made, full rewrites, and language design changes.
@@ -27,7 +27,7 @@
 ‎- The v0.2.5 runtime rivals Deno JavaScript when reading from a single file thousands to millions of times even with V8. The runtime was actually faster, the new string storage in the interpreter and file caching really paid off.
 ‎- Many language features are now more stable and less error prone.
 
-‎## v0.3.0
+## v0.3.0
 
 ‎This planned version of the runtime is already in development and will come with the first stable bytecode interpreter or VM for the language.
 
