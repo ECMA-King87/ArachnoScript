@@ -11,6 +11,32 @@ ArachnoScript uses a syntax that inherits from the JavaScript programming langua
 
 Both the language and its runtime continue to grow and change, moving toward an ambitious version 1 release.
 
+### Variable Declarations (since v0.2.5)
+
+As of **v0.2.5**, the original declaration keywords were replaced for better familiarity and clarity:
+
+| Old keyword(s)       | New keyword | Meaning                          |
+|----------------------|-------------|----------------------------------|
+| `spawn`              | `let`       | Mutable variable                 |
+| `immortal spawn`     | `const`     | Immutable (constant) binding     |
+| `static`             | *(removed)* | No longer supported              |
+
+**Examples:**
+
+```as
+// Mutable variable
+let name = "ECMA King";
+
+// Constant
+const PI = 3.14159;
+
+// Multiple declarations
+let a = 1, b = 2, c = 3;
+const X = 10, Y = 20;
+```
+
+> **Note:** The old keywords (`spawn`, `immortal`, `static`) are no longer valid and will cause a syntax error.
+
 ## The Runtime
 
 The ArachnoScript Runtime Environment (ARE) is the core utility for executing ArachnoScript code.
@@ -26,6 +52,7 @@ Several improvements and performance boosts were made, full rewrites, and langua
 - A lot of optimizations were made to the interpreter and the parser, significantly improving execution speed.
 - The v0.2.5 runtime rivals Deno JavaScript when reading from a single file thousands to millions of times even with V8. The runtime was actually faster, the new string storage in the interpreter and file caching really paid off.
 - Many language features are now more stable and less error prone.
+- **Keyword update**: `spawn` → `let`, `immortal spawn` → `const`, `static` removed.
 
 ## v0.3.0
 
