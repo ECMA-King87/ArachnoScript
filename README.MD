@@ -48,7 +48,7 @@ The ArachnoScript runtime is written in the Go programming language, speeding up
 This version of the runtime marks a significant milestone in its development.
 Several improvements and performance boosts were made, full rewrites, and language design changes.
 
-- Unlike previous versions which required awkward installations of the runtime and the standard library on other platforms besides windows, v0.2.5 has the standard library embedded into it. This means faster startups, a tamper proof standard library, and cleaner installations.
+- Previously (versions prior to v0.2.5), the runtime required an awkward setup on non-windows platform. Now,v0.2.5 has the standard library embedded into it. This means faster startups, a tamper proof standard library, and cleaner installations.
 - A lot of optimizations were made to the interpreter and the parser, significantly improving execution speed.
 - The v0.2.5 runtime rivals Deno JavaScript when reading from a single file thousands to millions of times even with V8. The runtime was actually faster, the new string storage in the interpreter and file caching really paid off.
 - Many language features are now more stable and less error prone.
