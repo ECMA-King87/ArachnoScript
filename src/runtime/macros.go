@@ -959,7 +959,7 @@ func valToObjectCast(arg Value) *Object {
 	// case *Macro: Can't convert macro. Especially for future reasons.
 	// Macros aren't meant to exist at runtime but v0.2.5 is interpreted.
 
-	// TODO: Assertain if this is a good design decision.
+	// TODO: Assertain if this is a good design.
 	case *String, *Undefined, Boolean, Number:
 		obj := NewObject()
 		obj.defaultVal = v

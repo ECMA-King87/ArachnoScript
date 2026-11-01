@@ -13,11 +13,4 @@ import "json.as";
 import "console.as";
 import "strings.as";
 
-let i = 0
-
-@benchmark for (const _ of #_new_byte_array(1024 ** 2)) {
-  if (i % 100 == 0) {
-    console.log(i);
-  }
-  i++
-}
+#_repl();

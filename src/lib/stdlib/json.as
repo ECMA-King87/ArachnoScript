@@ -65,3 +65,15 @@ globalThis.JSON = {};
     }
   },
 });
+
+#_define_property(globalThis.JSON, "stringify", {
+  writable: false,
+  configurable: false,
+  value: function (obj, indent) {
+    if (typeof indent != "boolean" && indent != undefined) {
+      throw new Error("TypeError", "Second argument must be of type boolean.");
+    }
+    indent ??= false;
+    return #_json_stringify(obj, indent);
+  },
+});

@@ -19,7 +19,13 @@ func jsonValueFromAS(v Value) (obj any, err error) {
 			}
 		})
 		return arr, err
+	case *Undefined:
+		// return nil to encode to null
+		return nil, nil
 	case *Object:
+		if v == nil {
+			return v, nil
+		}
 		m := make(map[string]any)
 		v.own.ForEach(func(key *String, pd PropertyDescriptor, _ bool) {
 			if err == nil {
@@ -91,7 +97,7 @@ func JSONStringify(v Value, indent bool) (Value, error) {
 	switch v := v.(type) {
 	case *Object:
 		if v == nil {
-			return NewString("null"), nil
+			return NullStr, nil
 		}
 		m := make(map[string]any)
 		var err error
@@ -103,7 +109,7 @@ func JSONStringify(v Value, indent bool) (Value, error) {
 			}
 		})
 		if err != nil {
-			return NewString("{}"), err
+			return NullStr, err
 		}
 		b, err := lib.JSONEncode(m, indent)
 		return NewString(string(b)), err
@@ -123,6 +129,8 @@ func JSONStringify(v Value, indent bool) (Value, error) {
 			return undefined, err
 		}
 		return NewString(string(b)), err
+	case *Undefined:
+		return NullStr, nil
 	}
 	return undefined, nil
 }

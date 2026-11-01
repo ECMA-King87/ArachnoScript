@@ -216,6 +216,7 @@ func (s *Scope) error(name ErrorName, path int, loc parser.Loc, value Value) {
 			b.WriteString(s.worker.Inspect(value))
 			if path != 0 {
 				b.WriteString(lib.EOL)
+				lib.Print(path, loc)
 				b.WriteString(lib.DebugMsg(path, loc))
 			}
 			b.WriteString(lib.EOL)

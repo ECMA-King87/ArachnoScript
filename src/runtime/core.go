@@ -34,7 +34,7 @@ type (
 )
 
 func SetupARE() {
-	// TODO: this implementation is not cross platform.
+	// TODO: make sure this implementation is cross platform.
 	if !lib.DEBUG_MODE {
 		value, err := lib.ReadRegistryValue("Environment", "Path")
 		if err == nil {

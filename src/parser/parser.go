@@ -174,7 +174,7 @@ func NewBuiltinsParser(name string) *ModuleParser {
 	var key int
 	if lib.DEBUG_MODE {
 		b, k, err := lib.ReadFile(
-			lib.JoinPaths(lib.DirOf(lib.ExecPath()), "..", "app_src", "lib", "stdlib", name),
+			lib.JoinPaths(lib.DirOf(lib.ExecPath()), "..", "src", "lib", "stdlib", name),
 		)
 		if err != nil {
 			(&ModuleParser{}).parseError(PathError, err.Error())
@@ -218,7 +218,13 @@ func NewBuiltinsParser(name string) *ModuleParser {
 // if the path does not exist, the parser will attempt to parse 'path'.
 // handle this if it is unwanted behavior.
 func NewModuleParser(path string, isMain, isRepl bool) (mp *ModuleParser) {
-	defer func() { recover() }()
+	defer func() {
+		err := recover()
+		mp.OwnModule.Invalid = err != nil
+		if mp.OwnModule.Invalid {
+			GlobalParser.errors.Push(err.(string))
+		}
+	}()
 	var pk int
 	var buffer []byte
 	if isRepl {
@@ -264,7 +270,7 @@ func NewModuleParser(path string, isMain, isRepl bool) (mp *ModuleParser) {
 }
 
 func (p *ModuleParser) Parse() {
-	if p == nil {
+	if p == nil || p.OwnModule.Invalid {
 		return
 	}
 	defer func() {
@@ -1191,26 +1197,31 @@ func (p *ModuleParser) parse_exprs(valid_tags ...NodeTag) *Node {
 }
 
 func (p *ModuleParser) parse_param() *Node {
+	var lhs *Node
 	switch p.atType(0) {
 	case DOT3:
 		start := p.eat().loc
 		param := p.parse_exprs(T_IDENT, T_ARRAY_LIT)
-		return &Node{
+		lhs = &Node{
 			Tag:      T_RESTORSPREAD,
 			Children: nil,
 			Data:     param,
 			Loc:      p.loc(start, param.Loc),
 		}
 	case TIMES:
-		lib.Panic("language feature unimplemented.")
-		return &Node{}
+		p.parseError(SyntaxError, "language feature unimplemented.")
+		lhs = &Node{}
 	case O_BRACE:
-		return p.parse_object_destructuring()
+		lhs = p.parse_object_destructuring()
 	case O_BRACKET:
-		return p.parse_array_destructuring()
+		lhs = p.parse_array_destructuring()
 	default:
-		return parse_ident(p)
+		lhs = parse_ident(p)
 	}
+
+	// TODO: default params
+
+	return lhs
 }
 
 func (p *ModuleParser) parse_params() []*Node {
